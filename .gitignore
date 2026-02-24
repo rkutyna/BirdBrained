@@ -1,0 +1,37 @@
+# NABirds dataset
+/NABirds Dataset/
+
+# Pipeline/log outputs
+/artifacts/logs/
+/artifacts/pipeline_runs/
+
+.venv
+
+__pycache__
+
+*.jpg
+*.jpeg
+
+
+# Python caches/build
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Virtual env + local env files
+.venv/
+.env
+.env.*
+
+# OS / editor noise
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+/artifacts/*.pt
+/data/cifar-10-python.tar.gz
