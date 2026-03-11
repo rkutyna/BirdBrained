@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
+import time
+from dataclasses import asdict
 from pathlib import Path
-import json
 from typing import Iterable
 
 import numpy as np
@@ -11,12 +14,27 @@ from PIL import Image
 import streamlit as st
 
 from bird_pipeline import (
+    ALL_SPECIFIC_LABEL_NAMES_CSV,
+    DEFAULT_LABEL_NAMES_CSV,
     PipelineConfig,
     get_default_device,
     input_items_from_uploaded_files,
     input_items_from_folder,
     list_classifier_checkpoints,
     run_inference_batch,
+)
+from training_engine import (
+    LOGS_DIR,
+    QUEUE_JSON,
+    SUMMARY_CSV,
+    TrainingConfig,
+    add_to_queue,
+    cancel_running_job,
+    clear_finished_jobs,
+    get_progress,
+    get_training_log,
+    load_queue,
+    remove_from_queue,
 )
 
 
@@ -265,10 +283,49 @@ def _path_keys(path_str: str) -> set[str]:
     return keys
 
 
-def choose_default_checkpoint(
+def _checkpoint_stage_rank(ckpt_path: str) -> int:
+    """Return a stage rank so stage 3 > stage 2 > stage 1."""
+    name = Path(ckpt_path).name.lower()
+    if "layer3_layer4" in name:
+        return 3
+    if "layer4" in name:
+        return 2
+    return 1
+
+
+def _checkpoint_test_acc(
+    checkpoint_path: str,
+    run_summary_csv: Path = Path("artifacts/logs/run_summary.csv"),
+) -> float | None:
+    """Return the best test_acc recorded for this checkpoint in run_summary.csv, or None."""
+    if not run_summary_csv.exists():
+        return None
+    try:
+        df = pd.read_csv(run_summary_csv)
+        if not {"checkpoint_path", "test_acc"}.issubset(df.columns):
+            return None
+        keys = _path_keys(checkpoint_path)
+        mask = df["checkpoint_path"].apply(
+            lambda p: bool(_path_keys(str(p)) & keys) if pd.notna(p) else False
+        )
+        matched = pd.to_numeric(df.loc[mask, "test_acc"], errors="coerce").dropna()
+        return float(matched.max()) if not matched.empty else None
+    except Exception:
+        return None
+
+
+def _filter_checkpoints_by_mode(checkpoints: list[str], all_specific: bool) -> list[str]:
+    if all_specific:
+        filtered = [c for c in checkpoints if "all_specific" in Path(c).name]
+    else:
+        filtered = [c for c in checkpoints if "all_specific" not in Path(c).name]
+    return filtered if filtered else checkpoints
+
+
+def choose_best_checkpoint(
     checkpoints: Iterable[str],
     run_summary_csv: Path = Path("artifacts/logs/run_summary.csv"),
-) -> tuple[str, float | None]:
+) -> str:
     ckpts = list(checkpoints)
     if not ckpts:
         raise ValueError("No checkpoints provided.")
@@ -285,25 +342,17 @@ def choose_default_checkpoint(
                 valid_df = summary_df.dropna(subset=["checkpoint_path", "test_acc"]).copy()
                 valid_df["test_acc"] = pd.to_numeric(valid_df["test_acc"], errors="coerce")
                 valid_df = valid_df.dropna(subset=["test_acc"])
-
-                if "timestamp" in valid_df.columns:
-                    valid_df = valid_df.sort_values(["test_acc", "timestamp"], ascending=[False, False])
-                else:
-                    valid_df = valid_df.sort_values(["test_acc"], ascending=[False])
-
+                valid_df = valid_df.sort_values("test_acc", ascending=False)
                 for _, row in valid_df.iterrows():
-                    ckpt_path = str(row["checkpoint_path"])
-                    for key in _path_keys(ckpt_path):
+                    for key in _path_keys(str(row["checkpoint_path"])):
                         if key in checkpoint_by_key:
-                            return checkpoint_by_key[key], float(row["test_acc"])
+                            return checkpoint_by_key[key]
         except Exception:
-            # Ignore summary parsing failures and fall back to filename heuristic.
             pass
 
-    for ckpt in ckpts:
-        if "head_only" in Path(ckpt).name:
-            return ckpt, None
-    return ckpts[0], None
+    # Fallback: prefer stage3 > stage2 > stage1 by filename
+    return max(ckpts, key=_checkpoint_stage_rank)
+
 
 
 def render_summary(df: pd.DataFrame) -> None:
@@ -335,14 +384,80 @@ def render_summary(df: pd.DataFrame) -> None:
         tagged = int(df["metadata_written"].fillna(False).sum())
         st.caption(f"Original JPEGs tagged with metadata: {tagged}")
 
+    if "ground_truth" in df.columns:
+        labeled = int(df["ground_truth"].notna().sum())
+        if labeled > 0:
+            in_model_mask = df["label_in_model"] == True
+            correct = int((df.loc[in_model_mask, "is_correct"] == True).sum())
+            wrong = int((df.loc[in_model_mask, "is_correct"] == False).sum())
+            out_of_scope = int((df["label_in_model"] == False).sum())
+            evaluable = correct + wrong
+            accuracy = correct / evaluable if evaluable > 0 else None
+
+            no_bird_excluded = int(
+                ((df["label_in_model"] == False) & (df["yolo_detected"].fillna(False) == False)
+                 & df["ground_truth"].notna()).sum()
+            )
+            out_of_scope = int(
+                ((df["label_in_model"] == False) & (df["yolo_detected"].fillna(True) == True)
+                 & df["ground_truth"].notna()).sum()
+            )
+
+            in_top5 = int((df.loc[in_model_mask, "is_in_top5"] == True).sum())
+            top5_acc = in_top5 / evaluable if evaluable > 0 else None
+
+            st.divider()
+            st.markdown("**Ground-truth accuracy** (from labels.csv in photo folder)")
+            ga1, ga2, ga3, ga4, ga5, ga6, ga7 = st.columns(7)
+            ga1.metric("Labeled photos", labeled)
+            ga2.metric("Correct (top-1)", correct)
+            ga3.metric("Wrong", wrong)
+            ga4.metric("No bird detected", no_bird_excluded,
+                       help="Bird detector found nothing — excluded from accuracy")
+            ga5.metric("Species not in model", out_of_scope,
+                       help="Ground-truth species not in this model's label set — excluded from accuracy")
+            ga6.metric(
+                "Top-1 accuracy",
+                f"{accuracy * 100:.1f}%" if accuracy is not None else "n/a",
+                help="correct / (correct + wrong), photos with no detection or out-of-scope species excluded",
+            )
+            ga7.metric(
+                "Top-5 accuracy",
+                f"{top5_acc * 100:.1f}%" if top5_acc is not None else "n/a",
+                help="Ground truth appears anywhere in model's top-5 predictions",
+            )
+
 
 def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
     show_df = df.copy()
 
+    filter_cols = st.columns(2) if "ground_truth" in show_df.columns else [st]
     species_options = ["(all)"] + sorted(x for x in show_df["pred_species"].dropna().unique().tolist())
-    species_filter = st.selectbox("Filter by predicted species", options=species_options)
+    species_filter = filter_cols[0].selectbox("Filter by predicted species", options=species_options)
     if species_filter != "(all)":
         show_df = show_df[show_df["pred_species"] == species_filter].copy()
+
+    if "ground_truth" in show_df.columns and show_df["ground_truth"].notna().any():
+        verdict_filter = filter_cols[1].selectbox(
+            "Filter by verdict",
+            options=["(all)", "Correct", "Wrong", "No bird detected", "Not in model subset", "Unlabeled"],
+        )
+        if verdict_filter == "Correct":
+            show_df = show_df[show_df["is_correct"] == True].copy()
+        elif verdict_filter == "Wrong":
+            show_df = show_df[(show_df["is_correct"] == False) & (show_df["label_in_model"] == True)].copy()
+        elif verdict_filter == "No bird detected":
+            show_df = show_df[
+                (show_df["label_in_model"] == False) & (show_df["yolo_detected"].fillna(False) == False)
+                & show_df["ground_truth"].notna()
+            ].copy()
+        elif verdict_filter == "Not in model subset":
+            show_df = show_df[
+                (show_df["label_in_model"] == False) & (show_df["yolo_detected"].fillna(True) == True)
+                & show_df["ground_truth"].notna()
+            ].copy()
+        elif verdict_filter == "Unlabeled":
+            show_df = show_df[show_df["ground_truth"].isna()].copy()
 
     sort_options = [
         "Species (A to Z)",
@@ -430,6 +545,24 @@ def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
                         f"<div class='meta'>Metadata tagged: {meta_state}{(' | ' + str(meta_note)) if meta_note else ''}</div>",
                         unsafe_allow_html=True,
                     )
+                if pd.notna(row.get("ground_truth")):
+                    gt = row["ground_truth"]
+                    in_model = row.get("label_in_model")
+                    is_correct = row.get("is_correct")
+                    if not in_model:
+                        if not row.get("yolo_detected", True):
+                            verdict = '<span style="background:#64748b;color:#fff;border-radius:999px;padding:0.15rem 0.6rem;font-weight:700;font-size:0.8rem;">⊘ no bird detected</span>'
+                        else:
+                            verdict = '<span style="background:#b45309;color:#fff;border-radius:999px;padding:0.15rem 0.6rem;font-weight:700;font-size:0.8rem;">⊘ not in model subset</span>'
+                    elif is_correct:
+                        verdict = '<span style="background:#0f9d58;color:#fff;border-radius:999px;padding:0.15rem 0.6rem;font-weight:700;font-size:0.8rem;">✓ Correct</span>'
+                    else:
+                        verdict = '<span style="background:#db4437;color:#fff;border-radius:999px;padding:0.15rem 0.6rem;font-weight:700;font-size:0.8rem;">✗ Wrong</span>'
+                    st.markdown(
+                        f"Ground truth: **{gt}** &nbsp; {verdict}",
+                        unsafe_allow_html=True,
+                    )
+
                 if pd.notna(row.get("pred_species")):
                     st.markdown(f"Predicted species: **{row['pred_species']}**")
                     st.markdown(
@@ -440,6 +573,17 @@ def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
                         ),
                         unsafe_allow_html=True,
                     )
+                    top5 = _parse_top5(row.get("pred_top5"))
+                    if top5:
+                        gt_base = _strip_qualifier(str(row.get("ground_truth", ""))) if pd.notna(row.get("ground_truth")) else None
+                        lines = []
+                        for e in top5[1:]:  # skip rank 1, already shown above
+                            sp = e.get("species", "?")
+                            cf = e.get("confidence", 0.0)
+                            match = gt_base and _strip_qualifier(sp) == gt_base
+                            highlight = " ← ground truth" if match else ""
+                            lines.append(f"{e['rank']}. {sp} ({cf*100:.1f}%){highlight}")
+                        st.caption("Top 5:\n" + "\n".join(["1. " + row["pred_species"] + f" ({row.get('pred_confidence', 0)*100:.1f}%)" + (" ← ground truth" if gt_base and _strip_qualifier(str(row['pred_species'])) == gt_base else "")] + lines))
                     sharpness_100 = row.get("sharpness_score_100")
                     if pd.notna(sharpness_100):
                         sharpness_color = row.get("sharpness_color")
@@ -485,6 +629,114 @@ def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
             st.markdown("</div>", unsafe_allow_html=True)
 
 
+def _load_folder_labels(folder_path: str) -> dict[str, str]:
+    """Load labels.csv from folder_path, return {filename: species}."""
+    labels_path = Path(folder_path) / "labels.csv"
+    if not labels_path.exists():
+        return {}
+    try:
+        df = pd.read_csv(labels_path)
+        if {"filename", "species"}.issubset(df.columns):
+            return dict(zip(df["filename"].astype(str), df["species"].astype(str)))
+    except Exception:
+        pass
+    return {}
+
+
+def _infer_labels_from_results(result_df: pd.DataFrame) -> dict[str, str]:
+    """Try to find labels.csv by inspecting the source_path column of results."""
+    if "source_path" not in result_df.columns:
+        return {}
+    parents = result_df["source_path"].dropna().map(lambda p: str(Path(p).parent))
+    if parents.empty:
+        return {}
+    folder = parents.mode().iloc[0]
+    return _load_folder_labels(folder)
+
+
+def _parse_top5(value) -> list | None:
+    """Return pred_top5 as a list of dicts whether it's already a list or a CSV-serialised string."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, list):
+        return value
+    import ast
+    try:
+        parsed = ast.literal_eval(str(value))
+        return parsed if isinstance(parsed, list) else None
+    except Exception:
+        return None
+
+
+def _strip_qualifier(name: str) -> str:
+    """Strip sex/morph qualifier: 'Hooded Merganser (Breeding male)' -> 'Hooded Merganser'."""
+    import re
+    return re.sub(r"\s*\([^)]*\)\s*", "", str(name)).strip()
+
+
+def _annotate_with_ground_truth(
+    result_df: pd.DataFrame,
+    labels: dict[str, str],
+    label_names_csv: str | Path,
+) -> pd.DataFrame:
+    """Add ground_truth, label_in_model, is_correct columns to result_df.
+
+    Ground truth labels are base species names (no sex/morph qualifier).
+    Comparison is done at base-species level so 'Hooded Merganser' matches
+    'Hooded Merganser (Breeding male)'.
+    """
+    if not labels:
+        return result_df
+    df = result_df.copy()
+    try:
+        model_species_full = set(pd.read_csv(label_names_csv)["species"].dropna().astype(str).tolist())
+    except Exception:
+        model_species_full = set()
+
+    model_base_species = {_strip_qualifier(s) for s in model_species_full}
+
+    df["ground_truth"] = df["image_name"].map(labels)
+
+    def _label_in_model(row):
+        gt = row.get("ground_truth")
+        if pd.isna(gt) or gt is None:
+            return None
+        # No bird detected → exclude from accuracy (same treatment as out-of-scope species)
+        if not row.get("yolo_detected", True):
+            return False
+        return _strip_qualifier(str(gt)) in model_base_species
+
+    df["label_in_model"] = df.apply(_label_in_model, axis=1)
+
+    def _is_correct(row):
+        gt = row.get("ground_truth")
+        pred = row.get("pred_species")
+        if pd.isna(gt) or gt is None:
+            return None
+        if not row.get("yolo_detected", True):
+            return None  # excluded, not wrong
+        return _strip_qualifier(str(pred)) == _strip_qualifier(str(gt))
+
+    def _is_in_top5(row):
+        gt = row.get("ground_truth")
+        if pd.isna(gt) or gt is None:
+            return None
+        if not row.get("yolo_detected", True):
+            return None
+        top5 = _parse_top5(row.get("pred_top5"))
+        if not top5:
+            return None
+        gt_base = _strip_qualifier(str(gt))
+        try:
+            return any(_strip_qualifier(str(e["species"])) == gt_base for e in top5)
+        except Exception:
+            return None
+
+    df["is_correct"] = df.apply(_is_correct, axis=1)
+    df["is_in_top5"] = df.apply(_is_in_top5, axis=1)
+    return df
+
+
 def list_previous_run_dirs(root: Path = Path("artifacts/pipeline_runs")) -> list[Path]:
     if not root.exists():
         return []
@@ -493,13 +745,377 @@ def list_previous_run_dirs(root: Path = Path("artifacts/pipeline_runs")) -> list
     return runs
 
 
+# ---------------------------------------------------------------------------
+# Training tab helpers
+# ---------------------------------------------------------------------------
+_SWEEP_PARAMS = {
+    "stage1_lr": "Stage 1 LR",
+    "stage2_lr": "Stage 2 LR",
+    "stage3_lr": "Stage 3 LR",
+    "stage1_epochs": "Stage 1 Epochs",
+    "stage2_epochs": "Stage 2 Epochs",
+    "stage3_epochs": "Stage 3 Epochs",
+    "weight_decay": "Weight Decay",
+    "label_smoothing": "Label Smoothing",
+    "batch_size": "Batch Size",
+    "seed": "Seed",
+    "crop_scale_min": "Crop Scale Min",
+    "jitter_brightness": "Jitter Brightness",
+    "jitter_hue": "Jitter Hue",
+    "random_erasing_p": "Random Erasing P",
+}
+
+
+def _generate_sweep_values(start: float, stop: float, multiplier: float) -> list[float]:
+    """Generate start, start*mult, start*mult^2, ... while in range [start, stop] (or [stop, start] if mult<1)."""
+    if multiplier <= 0 or multiplier == 1:
+        return [start]
+    values = []
+    v = start
+    if multiplier > 1:
+        while v <= stop + 1e-12:
+            values.append(v)
+            v *= multiplier
+    else:
+        while v >= stop - 1e-12:
+            values.append(v)
+            v *= multiplier
+    return values if values else [start]
+
+
+def _launch_next_job() -> bool:
+    """Start the next pending job if none is running. Returns True if a job was launched."""
+    queue = load_queue()
+    running = [j for j in queue if j["status"] == "running"]
+    pending = [j for j in queue if j["status"] == "pending"]
+
+    if running or not pending:
+        return False
+
+    # Check if our stored subprocess is still alive
+    proc = st.session_state.get("_training_proc")
+    if proc is not None and proc.poll() is None:
+        return False  # still running
+
+    next_job = pending[0]
+    job_id = next_job["id"]
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOGS_DIR / f"training_{job_id}.log"
+    log_f = open(log_path, "w")
+    proc = subprocess.Popen(
+        [sys.executable, "training_engine.py", "--job-id", job_id],
+        stdout=log_f,
+        stderr=log_f,
+    )
+    st.session_state["_training_proc"] = proc
+    st.session_state["_training_log_f"] = log_f
+    return True
+
+
+def _config_form(prefix: str = "run") -> TrainingConfig | None:
+    """Render a TrainingConfig form and return the config, or None if invalid."""
+    run_label = st.text_input("Run label", value="manual", key=f"{prefix}_label",
+                              help="Short name for this run, used in checkpoint filenames.")
+    species_mode = st.radio("Species mode", options=["98", "555"], index=0,
+                             key=f"{prefix}_species",
+                             help="98 = target species subset | 555 = all NABirds-specific classes")
+
+    c1, c2, c3 = st.columns(3)
+    seed = c1.number_input("Seed", value=42, step=1, key=f"{prefix}_seed")
+    batch_size = c2.number_input("Batch size", value=32, min_value=1, step=8, key=f"{prefix}_bs")
+    val_fraction = c3.number_input("Val fraction", value=0.10, min_value=0.01, max_value=0.5,
+                                    step=0.01, key=f"{prefix}_vf")
+
+    _stage_labels = {
+        1: "Head (fc only)",
+        2: "Layer 4 + Head",
+        3: "Layer 3 + Layer 4 + Head",
+    }
+    stages_to_run = st.multiselect(
+        "Layers to train (cumulative, head → deeper)",
+        options=[1, 2, 3],
+        default=[1, 2, 3],
+        format_func=lambda s: _stage_labels[s],
+        key=f"{prefix}_stages",
+    )
+    if not stages_to_run:
+        st.warning("Select at least one training stage.")
+        return None
+
+    with st.expander("Per-stage settings", expanded=True):
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            st.markdown("**Head (fc only)**")
+            st.caption("Trains classification head, backbone frozen")
+            s1_ep = st.number_input("Epochs", value=20, min_value=1, key=f"{prefix}_s1ep")
+            s1_lr = st.number_input("LR", value=1e-3, format="%.2e", key=f"{prefix}_s1lr")
+        with sc2:
+            st.markdown("**Layer 4 + Head**")
+            st.caption("Unfreezes ResNet layer4 + head")
+            s2_ep = st.number_input("Epochs", value=10, min_value=1, key=f"{prefix}_s2ep")
+            s2_lr = st.number_input("LR", value=2e-4, format="%.2e", key=f"{prefix}_s2lr")
+        with sc3:
+            st.markdown("**Layer 3 + Layer 4 + Head**")
+            st.caption("Unfreezes layer3, layer4 + head")
+            s3_ep = st.number_input("Epochs", value=8, min_value=1, key=f"{prefix}_s3ep")
+            s3_lr = st.number_input("LR", value=1e-4, format="%.2e", key=f"{prefix}_s3lr")
+
+    with st.expander("Shared training params"):
+        p1, p2 = st.columns(2)
+        wd = p1.number_input("Weight decay", value=2e-4, format="%.2e", key=f"{prefix}_wd")
+        ls = p2.number_input("Label smoothing", value=0.0, min_value=0.0, max_value=0.5,
+                              step=0.01, key=f"{prefix}_ls")
+
+    with st.expander("Augmentation"):
+        a1, a2 = st.columns(2)
+        cs_min = a1.number_input("Crop scale min", value=0.6, min_value=0.1, max_value=1.0,
+                                   step=0.05, key=f"{prefix}_csmin")
+        cs_max = a2.number_input("Crop scale max", value=1.0, min_value=0.1, max_value=1.0,
+                                   step=0.05, key=f"{prefix}_csmax")
+        b1, b2, b3, b4 = st.columns(4)
+        j_br = b1.number_input("Jitter brightness", value=0.3, min_value=0.0, step=0.05, key=f"{prefix}_jbr")
+        j_co = b2.number_input("Jitter contrast", value=0.3, min_value=0.0, step=0.05, key=f"{prefix}_jco")
+        j_sa = b3.number_input("Jitter saturation", value=0.3, min_value=0.0, step=0.05, key=f"{prefix}_jsa")
+        j_hu = b4.number_input("Jitter hue", value=0.1, min_value=0.0, max_value=0.5, step=0.01,
+                                 key=f"{prefix}_jhu")
+        e1, e2 = st.columns(2)
+        er_p = e1.number_input("Erasing P", value=0.3, min_value=0.0, max_value=1.0, step=0.05,
+                                 key=f"{prefix}_erp")
+        er_s = e2.number_input("Erasing scale max", value=0.2, min_value=0.01, max_value=0.5,
+                                 step=0.01, key=f"{prefix}_ers")
+
+    return TrainingConfig(
+        run_label=run_label,
+        species_mode=species_mode,
+        seed=int(seed),
+        batch_size=int(batch_size),
+        val_fraction=float(val_fraction),
+        stages_to_run=list(stages_to_run),
+        stage1_epochs=int(s1_ep), stage1_lr=float(s1_lr),
+        stage2_epochs=int(s2_ep), stage2_lr=float(s2_lr),
+        stage3_epochs=int(s3_ep), stage3_lr=float(s3_lr),
+        weight_decay=float(wd), label_smoothing=float(ls),
+        crop_scale_min=float(cs_min), crop_scale_max=float(cs_max),
+        jitter_brightness=float(j_br), jitter_contrast=float(j_co),
+        jitter_saturation=float(j_sa), jitter_hue=float(j_hu),
+        random_erasing_p=float(er_p), random_erasing_scale_max=float(er_s),
+    )
+
+
+def _render_queue_dashboard() -> bool:
+    """Render running job progress + queue table. Returns True if a job is actively running."""
+    queue = load_queue()
+
+    # Status counts
+    counts = {s: sum(1 for j in queue if j["status"] == s)
+              for s in ("pending", "running", "done", "failed", "cancelled")}
+    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    mc1.metric("Pending", counts["pending"])
+    mc2.metric("Running", counts["running"])
+    mc3.metric("Done", counts["done"])
+    mc4.metric("Failed", counts["failed"])
+    mc5.metric("Cancelled", counts["cancelled"])
+
+    running_jobs = [j for j in queue if j["status"] == "running"]
+    any_running = bool(running_jobs)
+
+    # Live progress for running job
+    if running_jobs:
+        job = running_jobs[0]
+        job_id = job["id"]
+        progress = get_progress(job_id)
+        st.markdown(f"**Running job:** `{job_id}` — label: `{job['config'].get('run_label', '?')}`")
+
+        if progress:
+            status = progress.get("status", "?")
+            stage = progress.get("stage", 0)
+            epoch = progress.get("epoch", 0)
+            total_epochs = progress.get("total_epochs", 1)
+            train_acc = progress.get("train_acc")
+            val_acc = progress.get("val_acc")
+            best_val = progress.get("best_val_acc")
+
+            if status == "loading_data":
+                st.info("Loading dataset...")
+            elif status in ("running", "starting"):
+                frac = epoch / max(1, total_epochs)
+                st.progress(frac, text=f"Stage {stage} | Epoch {epoch}/{total_epochs}")
+                pm1, pm2, pm3 = st.columns(3)
+                if train_acc is not None:
+                    pm1.metric("Train acc", f"{train_acc:.4f}")
+                if val_acc is not None:
+                    pm2.metric("Val acc", f"{val_acc:.4f}")
+                if best_val is not None:
+                    pm3.metric("Best val acc", f"{best_val:.4f}")
+            else:
+                st.info(f"Status: {status}")
+
+        if st.button("Cancel running job", key="cancel_running"):
+            cancel_running_job(job_id)
+            st.warning(f"Cancel signal sent to job {job_id}. It will stop after the current epoch.")
+
+        with st.expander("Training log (tail)"):
+            log_text = get_training_log(job_id)
+            if log_text:
+                # Show last 60 lines
+                lines = log_text.splitlines()
+                st.code("\n".join(lines[-60:]), language=None)
+            else:
+                st.caption("No log output yet.")
+
+    # Queue table
+    st.markdown("### Queue")
+    if not queue:
+        st.caption("Queue is empty.")
+    else:
+        for job in queue:
+            job_id = job["id"]
+            status = job["status"]
+            cfg = job.get("config", {})
+            label = cfg.get("run_label", "?")
+            species = cfg.get("species_mode", "?")
+            stages = cfg.get("stages_to_run", [])
+            added = job.get("added_at", "")[:16]
+
+            status_icon = {"pending": "⏳", "running": "🔄", "done": "✅",
+                           "failed": "❌", "cancelled": "🚫"}.get(status, "?")
+
+            col_info, col_btn = st.columns([5, 1])
+            with col_info:
+                st.markdown(
+                    f"{status_icon} `{job_id}` &nbsp; **{label}** &nbsp; "
+                    f"species={species} &nbsp; stages={stages} &nbsp; added={added}",
+                    unsafe_allow_html=True,
+                )
+                if status == "failed":
+                    err = job.get("error", "")
+                    if err:
+                        st.caption(f"Error: {err[:120]}")
+            with col_btn:
+                if status == "pending":
+                    if st.button("Remove", key=f"rm_{job_id}"):
+                        remove_from_queue(job_id)
+                        st.rerun()
+
+    if counts["done"] + counts["failed"] + counts["cancelled"] > 0:
+        if st.button("Clear finished jobs"):
+            n = clear_finished_jobs()
+            st.success(f"Removed {n} finished job(s).")
+            st.rerun()
+
+    return any_running
+
+
+def render_training_tab() -> None:
+    st.header("Training Queue")
+
+    # Try to auto-start the next pending job
+    launched = _launch_next_job()
+    if launched:
+        st.success("Started next queued job.")
+
+    any_running = _render_queue_dashboard()
+
+    # Auto-refresh while a job is running
+    if any_running:
+        time.sleep(3)
+        st.rerun()
+
+    st.divider()
+
+    # ---- Add job ----
+    add_tab_single, add_tab_sweep = st.tabs(["Add Single Run", "Add Parameter Sweep"])
+
+    with add_tab_single:
+        with st.form("add_single_run"):
+            cfg = _config_form(prefix="single")
+            submitted = st.form_submit_button("Add to Queue")
+            if submitted and cfg is not None:
+                job_id = add_to_queue(cfg)
+                st.success(f"Job `{job_id}` added to queue.")
+                st.rerun()
+
+    with add_tab_sweep:
+        st.markdown("Vary one parameter multiplicatively across a range. All other params come from the base config below.")
+
+        sweep_param = st.selectbox(
+            "Parameter to sweep",
+            options=list(_SWEEP_PARAMS.keys()),
+            format_func=lambda k: _SWEEP_PARAMS[k],
+            key="sweep_param",
+        )
+
+        sc1, sc2, sc3 = st.columns(3)
+        sweep_start = sc1.number_input("Start value", value=1e-3, format="%.2e", key="sweep_start")
+        sweep_stop = sc2.number_input("Stop value", value=1e-5, format="%.2e", key="sweep_stop")
+        sweep_mult = sc3.number_input("Multiplier (×)", value=0.1, format="%.4f", key="sweep_mult",
+                                       help="Each step = previous × multiplier. Use <1 to decrease, >1 to increase.")
+
+        preview_vals = _generate_sweep_values(float(sweep_start), float(sweep_stop), float(sweep_mult))
+        st.caption(f"Preview ({len(preview_vals)} runs): {[f'{v:.4g}' for v in preview_vals]}")
+
+        with st.form("add_sweep"):
+            st.markdown("**Base config** (the non-swept parameters):")
+            base_cfg = _config_form(prefix="sweep_base")
+            sweep_submitted = st.form_submit_button(f"Add {len(preview_vals)} sweep jobs to Queue")
+            if sweep_submitted and base_cfg is not None:
+                added_ids = []
+                for val in preview_vals:
+                    cfg_dict = asdict(base_cfg)
+                    cfg_dict[sweep_param] = val
+                    cfg_dict["run_label"] = f"{base_cfg.run_label}_{sweep_param}_{val:.4g}"
+                    job_cfg = TrainingConfig(**cfg_dict)
+                    jid = add_to_queue(job_cfg)
+                    added_ids.append(jid)
+                st.success(f"Added {len(added_ids)} sweep jobs: {added_ids}")
+                st.rerun()
+
+    st.divider()
+
+    # ---- Run History ----
+    st.header("Run History")
+    if not SUMMARY_CSV.exists():
+        st.caption("No run history yet (artifacts/logs/run_summary.csv not found).")
+    else:
+        try:
+            df = pd.read_csv(SUMMARY_CSV)
+            df["test_acc"] = pd.to_numeric(df["test_acc"], errors="coerce")
+            df["best_val_acc"] = pd.to_numeric(df["best_val_acc"], errors="coerce")
+
+            filter_col, sort_col = st.columns(2)
+            stage_filter = filter_col.selectbox(
+                "Filter by stage",
+                options=["all"] + sorted(df["stage"].dropna().unique().tolist()),
+                key="hist_stage_filter",
+            )
+            show_df = df if stage_filter == "all" else df[df["stage"] == stage_filter]
+
+            st.dataframe(
+                show_df.sort_values("test_acc", ascending=False, na_position="last")[
+                    ["run_label", "stage", "test_acc", "best_val_acc", "num_epochs",
+                     "lr", "weight_decay", "label_smoothing", "checkpoint_path", "timestamp"]
+                ].reset_index(drop=True),
+                use_container_width=True,
+                hide_index=True,
+            )
+        except Exception as e:
+            st.error(f"Could not load run history: {e}")
+
+
 def main() -> None:
     st.set_page_config(page_title="Bird Gallery Inference", layout="wide")
     apply_css()
     logger = build_app_logger()
 
-    st.title("Bird Detection + Species Identification")
-    st.write("Run YOLO bird detection, crop best bird per photo, and classify species with your ResNet checkpoint.")
+    tab_classify, tab_training = st.tabs(["Classify", "Training"])
+
+    with tab_training:
+        render_training_tab()
+
+    # All classify UI lives inside tab_classify
+    with tab_classify:
+        st.title("Bird Detection + Species Identification")
+        st.write("Run YOLO bird detection, crop best bird per photo, and classify species with your ResNet checkpoint.")
 
     run_mode = "New inference"
     selected_run_dir: Path | None = None
@@ -518,17 +1134,34 @@ def main() -> None:
                 selected_run_dir = next((p for p in previous_runs if p.name == selected_name), None)
 
         st.header("Models")
-        ckpts = list_classifier_checkpoints("artifacts")
-        if not ckpts:
+        all_specific = st.toggle(
+            "All 555 NABirds species",
+            value=False,
+            help="Off = 98 target species subset  |  On = all 555 NABirds-specific classes",
+        )
+        label_names_csv = ALL_SPECIFIC_LABEL_NAMES_CSV if all_specific else DEFAULT_LABEL_NAMES_CSV
+
+        all_ckpts = list_classifier_checkpoints("artifacts")
+        if not all_ckpts:
             st.error("No .pt classifier checkpoints found in artifacts/")
             return
 
-        default_ckpt, default_test_acc = choose_default_checkpoint(ckpts)
+        ckpts = _filter_checkpoints_by_mode(all_ckpts, all_specific)
+        if not ckpts:
+            st.warning("No checkpoints found for the selected species set.")
+            ckpts = all_ckpts
 
-        classifier_checkpoint = st.selectbox("Classifier checkpoint", options=ckpts, index=ckpts.index(default_ckpt))
-        if default_test_acc is not None:
-            st.caption(f"Default set to highest test accuracy: {default_test_acc:.4f}")
-        label_names_csv = st.text_input("Label names CSV", value="artifacts/label_names.csv")
+        default_ckpt = choose_best_checkpoint(ckpts)
+        classifier_checkpoint = st.selectbox(
+            "Classifier checkpoint",
+            options=ckpts,
+            index=ckpts.index(default_ckpt),
+        )
+        ckpt_acc = _checkpoint_test_acc(classifier_checkpoint)
+        if ckpt_acc is not None:
+            st.caption(f"Test accuracy: **{ckpt_acc*100:.2f}%** | Label names: {label_names_csv}")
+        else:
+            st.caption(f"Label names: {label_names_csv}")
         yolo_weights = st.text_input("YOLO weights", value="yolo11n.pt")
         yolo_conf = st.slider("YOLO confidence threshold", min_value=0.01, max_value=0.95, value=0.25, step=0.01)
         device = st.selectbox("Device", options=["auto", get_default_device(), "cpu", "cuda", "mps"], index=0)
@@ -566,161 +1199,171 @@ def main() -> None:
 
         run_clicked = st.button("Run Inference", type="primary", disabled=(run_mode != "New inference"))
 
-    if run_mode == "View previous run":
-        if selected_run_dir is None:
-            st.info("Select a saved run to view results.")
+    with tab_classify:
+        if run_mode == "View previous run":
+            if selected_run_dir is None:
+                st.info("Select a saved run to view results.")
+                return
+            try:
+                results_csv_path = selected_run_dir / "results.csv"
+                results_json_path = selected_run_dir / "results.json"
+                errors_path = selected_run_dir / "errors.csv"
+
+                result_df = pd.read_csv(results_csv_path)
+                prev_labels = _infer_labels_from_results(result_df)
+                if prev_labels:
+                    result_df = _annotate_with_ground_truth(result_df, prev_labels, label_names_csv)
+                st.success(f"Loaded previous run: {selected_run_dir}")
+                if prev_labels:
+                    st.info(f"Found labels.csv with {len(prev_labels)} labeled photo(s) — showing accuracy metrics.")
+                render_summary(result_df)
+
+                st.subheader("Gallery")
+                render_gallery(result_df)
+
+                st.subheader("Exports")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.download_button(
+                        "Download results.csv",
+                        data=results_csv_path.read_bytes(),
+                        file_name=f"{selected_run_dir.name}_results.csv",
+                        mime="text/csv",
+                    )
+                with c2:
+                    if results_json_path.exists():
+                        st.download_button(
+                            "Download results.json",
+                            data=results_json_path.read_bytes(),
+                            file_name=f"{selected_run_dir.name}_results.json",
+                            mime="application/json",
+                        )
+
+                if errors_path.exists():
+                    st.subheader("Errors")
+                    err_df = pd.read_csv(errors_path)
+                    st.dataframe(err_df, use_container_width=True)
+
+                st.caption("Frontend log: artifacts/pipeline_runs/frontend.log")
+                st.caption(f"Pipeline log for this run: {selected_run_dir / 'pipeline.log'}")
+                return
+            except Exception as e:
+                logger.exception("Failed to load previous run")
+                st.error(f"Could not load previous run: {type(e).__name__}: {e}")
+                return
+
+        if not run_clicked:
+            st.info("Select inputs and click Run Inference.")
             return
 
         try:
-            results_csv_path = selected_run_dir / "results.csv"
-            results_json_path = selected_run_dir / "results.json"
-            errors_path = selected_run_dir / "errors.csv"
+            logger.info("Run requested | mode=%s | recursive=%s", input_mode, recursive)
+            if input_mode == "Upload files":
+                if not uploaded_files:
+                    st.warning("Please upload at least one JPEG file.")
+                    return
+                total_bytes = sum(getattr(f, "size", 0) for f in uploaded_files)
+                logger.info(
+                    "Upload batch stats | files=%d | total_bytes=%d | total_gb=%.3f",
+                    len(uploaded_files),
+                    total_bytes,
+                    total_bytes / (1024**3),
+                )
+                inputs = input_items_from_uploaded_files(uploaded_files)
+            else:
+                if not folder_path.strip():
+                    st.warning("Please enter a valid folder path.")
+                    return
+                inputs = input_items_from_folder(folder_path.strip(), recursive=recursive)
 
-            result_df = pd.read_csv(results_csv_path)
-            st.success(f"Loaded previous run: {selected_run_dir}")
+            if not inputs:
+                st.warning("No JPEG images found to process.")
+                return
+
+            logger.info(
+                "Input resolved | count=%d | checkpoint=%s | yolo_weights=%s | yolo_conf=%.3f | device=%s | yolo_bs=%d | cls_bs=%d",
+                len(inputs),
+                classifier_checkpoint,
+                yolo_weights,
+                float(yolo_conf),
+                device,
+                int(yolo_batch_size),
+                int(classifier_batch_size),
+            )
+
+            cfg = PipelineConfig(
+                classifier_checkpoint=classifier_checkpoint,
+                label_names_csv=label_names_csv,
+                yolo_weights=yolo_weights,
+                yolo_conf=float(yolo_conf),
+                device=device,
+                output_root="artifacts/pipeline_runs",
+                write_metadata_to_originals=bool(write_metadata_to_originals),
+                yolo_batch_size=int(yolo_batch_size),
+                classifier_batch_size=int(classifier_batch_size),
+            )
+
+            progress = st.progress(0.0, text="Initializing...")
+            status = st.empty()
+
+            def on_progress(done: int, total: int, message: str) -> None:
+                frac = float(done) / float(max(1, total))
+                progress.progress(min(max(frac, 0.0), 1.0), text=f"{done}/{total}")
+                status.info(message)
+
+            with st.spinner(f"Running inference on {len(inputs)} images..."):
+                results, errors, run_dir = run_inference_batch(inputs, cfg, progress_callback=on_progress)
+
+            progress.progress(1.0, text=f"{len(inputs)}/{len(inputs)}")
+            status.success(f"Finished. Run ID: {run_dir.name}")
+            logger.info("Run completed | run_dir=%s | results=%d | errors=%d", run_dir, len(results), len(errors))
+
+            st.success(f"Completed run: {run_dir}")
+
+            result_df = pd.DataFrame([r.__dict__ for r in results])
+            if input_mode == "Folder path" and folder_path.strip():
+                folder_labels = _load_folder_labels(folder_path.strip())
+                if folder_labels:
+                    result_df = _annotate_with_ground_truth(result_df, folder_labels, label_names_csv)
+                    st.info(f"Found labels.csv with {len(folder_labels)} labeled photo(s) — showing accuracy metrics.")
             render_summary(result_df)
 
             st.subheader("Gallery")
             render_gallery(result_df)
 
             st.subheader("Exports")
+            results_csv_path = run_dir / "results.csv"
+            results_json_path = run_dir / "results.json"
+
             c1, c2 = st.columns(2)
             with c1:
                 st.download_button(
                     "Download results.csv",
                     data=results_csv_path.read_bytes(),
-                    file_name=f"{selected_run_dir.name}_results.csv",
+                    file_name=f"{run_dir.name}_results.csv",
                     mime="text/csv",
                 )
             with c2:
-                if results_json_path.exists():
-                    st.download_button(
-                        "Download results.json",
-                        data=results_json_path.read_bytes(),
-                        file_name=f"{selected_run_dir.name}_results.json",
-                        mime="application/json",
-                    )
+                st.download_button(
+                    "Download results.json",
+                    data=results_json_path.read_bytes(),
+                    file_name=f"{run_dir.name}_results.json",
+                    mime="application/json",
+                )
 
+            errors_path = run_dir / "errors.csv"
             if errors_path.exists():
                 st.subheader("Errors")
                 err_df = pd.read_csv(errors_path)
                 st.dataframe(err_df, use_container_width=True)
+                logger.warning("Run completed with errors | errors_csv=%s | count=%d", errors_path, len(err_df))
 
-            st.caption("Frontend log: artifacts/pipeline_runs/frontend.log")
-            st.caption(f"Pipeline log for this run: {selected_run_dir / 'pipeline.log'}")
-            return
+            st.caption(f"Frontend log: artifacts/pipeline_runs/frontend.log")
+            st.caption(f"Pipeline log for this run: {run_dir / 'pipeline.log'}")
+
         except Exception as e:
-            logger.exception("Failed to load previous run")
-            st.error(f"Could not load previous run: {type(e).__name__}: {e}")
-            return
-
-    if not run_clicked:
-        st.info("Select inputs and click Run Inference.")
-        return
-
-    try:
-        logger.info("Run requested | mode=%s | recursive=%s", input_mode, recursive)
-        if input_mode == "Upload files":
-            if not uploaded_files:
-                st.warning("Please upload at least one JPEG file.")
-                return
-            total_bytes = sum(getattr(f, "size", 0) for f in uploaded_files)
-            logger.info(
-                "Upload batch stats | files=%d | total_bytes=%d | total_gb=%.3f",
-                len(uploaded_files),
-                total_bytes,
-                total_bytes / (1024**3),
-            )
-            inputs = input_items_from_uploaded_files(uploaded_files)
-        else:
-            if not folder_path.strip():
-                st.warning("Please enter a valid folder path.")
-                return
-            inputs = input_items_from_folder(folder_path.strip(), recursive=recursive)
-
-        if not inputs:
-            st.warning("No JPEG images found to process.")
-            return
-
-        logger.info(
-            "Input resolved | count=%d | checkpoint=%s | yolo_weights=%s | yolo_conf=%.3f | device=%s | yolo_bs=%d | cls_bs=%d",
-            len(inputs),
-            classifier_checkpoint,
-            yolo_weights,
-            float(yolo_conf),
-            device,
-            int(yolo_batch_size),
-            int(classifier_batch_size),
-        )
-
-        cfg = PipelineConfig(
-            classifier_checkpoint=classifier_checkpoint,
-            label_names_csv=label_names_csv,
-            yolo_weights=yolo_weights,
-            yolo_conf=float(yolo_conf),
-            device=device,
-            output_root="artifacts/pipeline_runs",
-            write_metadata_to_originals=bool(write_metadata_to_originals),
-            yolo_batch_size=int(yolo_batch_size),
-            classifier_batch_size=int(classifier_batch_size),
-        )
-
-        progress = st.progress(0.0, text="Initializing...")
-        status = st.empty()
-
-        def on_progress(done: int, total: int, message: str) -> None:
-            frac = float(done) / float(max(1, total))
-            progress.progress(min(max(frac, 0.0), 1.0), text=f"{done}/{total}")
-            status.info(message)
-
-        with st.spinner(f"Running inference on {len(inputs)} images..."):
-            results, errors, run_dir = run_inference_batch(inputs, cfg, progress_callback=on_progress)
-
-        progress.progress(1.0, text=f"{len(inputs)}/{len(inputs)}")
-        status.success(f"Finished. Run ID: {run_dir.name}")
-        logger.info("Run completed | run_dir=%s | results=%d | errors=%d", run_dir, len(results), len(errors))
-
-        st.success(f"Completed run: {run_dir}")
-
-        result_df = pd.DataFrame([r.__dict__ for r in results])
-        render_summary(result_df)
-
-        st.subheader("Gallery")
-        render_gallery(result_df)
-
-        st.subheader("Exports")
-        results_csv_path = run_dir / "results.csv"
-        results_json_path = run_dir / "results.json"
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.download_button(
-                "Download results.csv",
-                data=results_csv_path.read_bytes(),
-                file_name=f"{run_dir.name}_results.csv",
-                mime="text/csv",
-            )
-        with c2:
-            st.download_button(
-                "Download results.json",
-                data=results_json_path.read_bytes(),
-                file_name=f"{run_dir.name}_results.json",
-                mime="application/json",
-            )
-
-        errors_path = run_dir / "errors.csv"
-        if errors_path.exists():
-            st.subheader("Errors")
-            err_df = pd.read_csv(errors_path)
-            st.dataframe(err_df, use_container_width=True)
-            logger.warning("Run completed with errors | errors_csv=%s | count=%d", errors_path, len(err_df))
-
-        st.caption(f"Frontend log: artifacts/pipeline_runs/frontend.log")
-        st.caption(f"Pipeline log for this run: {run_dir / 'pipeline.log'}")
-
-    except Exception as e:
-        logger.exception("Pipeline failed")
-        st.error(f"Pipeline failed: {type(e).__name__}: {e}")
+            logger.exception("Pipeline failed")
+            st.error(f"Pipeline failed: {type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":

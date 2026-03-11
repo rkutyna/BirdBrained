@@ -14,6 +14,12 @@ from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import models, transforms
 
+from bird_pipeline import (
+    DEFAULT_LABEL_NAMES_CSV,
+    checkpoint_num_classes,
+    resolve_label_names_for_checkpoint,
+)
+
 
 TARGET_SIZE = 240
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -107,15 +113,17 @@ def crop_resize_pad(
 
 
 @st.cache_data(show_spinner=False)
-def load_frontend_data(dataset_root: str, artifacts_dir: str) -> FrontendData:
+def load_frontend_data(dataset_root: str, label_names_path: str) -> FrontendData:
     data_root = Path(dataset_root)
-    artifacts = Path(artifacts_dir)
-
-    labels_path = artifacts / "label_names.csv"
+    labels_path = Path(label_names_path)
     if not labels_path.exists():
         raise FileNotFoundError(f"Missing {labels_path}")
 
-    label_names = pd.read_csv(labels_path)["species"].tolist()
+    label_frame = pd.read_csv(labels_path)
+    if "species" not in label_frame.columns:
+        raise ValueError(f"Label names CSV must contain a 'species' column: {labels_path}")
+
+    label_names = label_frame["species"].dropna().astype(str).tolist()
     species_to_idx = {s: i for i, s in enumerate(label_names)}
 
     images = pd.read_csv(data_root / "images.txt", sep=" ", names=["image_id", "image_rel_path"])
@@ -126,29 +134,42 @@ def load_frontend_data(dataset_root: str, artifacts_dir: str) -> FrontendData:
 
     valid_class_ids = set(labels["class_id"].unique())
     classes = classes[classes["class_id"].isin(valid_class_ids)].copy()
-    classes["canon"] = classes["class_name"].map(canonicalize_name)
-
-    canon_to_class_ids: Dict[str, List[int]] = {}
-    for canon, grp in classes.groupby("canon"):
-        canon_to_class_ids[canon] = sorted(set(grp["class_id"].tolist()))
-
     class_id_to_species_idx: Dict[int, int] = {}
-    missing_species = []
-    for species_name in label_names:
-        canon = canonicalize_name(species_name)
-        matched_class_ids = canon_to_class_ids.get(canon, [])
-        if not matched_class_ids:
-            missing_species.append(species_name)
-            continue
-        y = species_to_idx[species_name]
-        for class_id in matched_class_ids:
-            class_id_to_species_idx[class_id] = y
+    if "class_id" in label_frame.columns:
+        # All-specific mode stores the exact NABirds class ids used during training.
+        mapped = label_frame.dropna(subset=["class_id", "species"]).copy()
+        mapped["class_id"] = pd.to_numeric(mapped["class_id"], errors="coerce")
+        mapped = mapped.dropna(subset=["class_id"]).copy()
+        mapped["class_id"] = mapped["class_id"].astype(int)
 
-    if missing_species:
-        raise RuntimeError(
-            "Could not map these trained species back to NABirds classes: "
-            + ", ".join(missing_species)
-        )
+        label_names = mapped["species"].astype(str).tolist()
+        species_to_idx = {s: i for i, s in enumerate(label_names)}
+        for idx, class_id in enumerate(mapped["class_id"].tolist()):
+            class_id_to_species_idx[int(class_id)] = idx
+    else:
+        # Target-species mode merges NABirds variants back into a single species label.
+        classes["canon"] = classes["class_name"].map(canonicalize_name)
+
+        canon_to_class_ids: Dict[str, List[int]] = {}
+        for canon, grp in classes.groupby("canon"):
+            canon_to_class_ids[canon] = sorted(set(grp["class_id"].tolist()))
+
+        missing_species = []
+        for species_name in label_names:
+            canon = canonicalize_name(species_name)
+            matched_class_ids = canon_to_class_ids.get(canon, [])
+            if not matched_class_ids:
+                missing_species.append(species_name)
+                continue
+            y = species_to_idx[species_name]
+            for class_id in matched_class_ids:
+                class_id_to_species_idx[class_id] = y
+
+        if missing_species:
+            raise RuntimeError(
+                "Could not map these trained species back to NABirds classes: "
+                + ", ".join(missing_species)
+            )
 
     df = images.merge(labels, on="image_id", how="inner")
     df = df.merge(splits, on="image_id", how="inner")
@@ -174,12 +195,34 @@ def load_frontend_data(dataset_root: str, artifacts_dir: str) -> FrontendData:
 def load_model(checkpoint_path: str, num_classes: int, device_name: str):
     device = torch.device(device_name)
     model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
     state = torch.load(checkpoint_path, map_location="cpu")
+    # Auto-detect fc head format: bare Linear (fc.weight) vs Sequential (fc.1.weight)
+    if "fc.weight" in state:
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+    else:
+        model.fc = nn.Sequential(
+            nn.Dropout(p=0.4),
+            nn.Linear(model.fc.in_features, num_classes),
+        )
     model.load_state_dict(state)
     model.eval()
     model.to(device)
     return model
+
+
+@st.cache_data(show_spinner=False)
+def inspect_checkpoint_label_setup(
+    checkpoint_path: str,
+    artifacts_dir: str,
+) -> tuple[str, int | None, int, bool]:
+    requested_label_names_csv = str(Path(artifacts_dir) / Path(DEFAULT_LABEL_NAMES_CSV).name)
+    checkpoint_class_count = checkpoint_num_classes(checkpoint_path)
+    resolved_label_names_csv, label_names, auto_resolved = resolve_label_names_for_checkpoint(
+        checkpoint_path=checkpoint_path,
+        label_names_path=requested_label_names_csv,
+        expected_num_classes=checkpoint_class_count,
+    )
+    return resolved_label_names_csv, checkpoint_class_count, len(label_names), auto_resolved
 
 
 def get_device_choice() -> str:
@@ -538,6 +581,41 @@ li[role="option"][aria-selected="true"] {
             index=default_b_idx,
         )
 
+        label_setup_error: str | None = None
+        ckpt_a_labels_csv = ""
+        ckpt_b_labels_csv = ""
+        try:
+            ckpt_a_labels_csv, ckpt_a_classes, ckpt_a_label_count, ckpt_a_auto = inspect_checkpoint_label_setup(
+                ckpt_a,
+                artifacts_dir,
+            )
+            ckpt_b_labels_csv, ckpt_b_classes, ckpt_b_label_count, ckpt_b_auto = inspect_checkpoint_label_setup(
+                ckpt_b,
+                artifacts_dir,
+            )
+        except Exception as e:
+            label_setup_error = str(e)
+            ckpt_a_classes = None
+            ckpt_b_classes = None
+            ckpt_a_label_count = None
+            ckpt_b_label_count = None
+            ckpt_a_auto = False
+            ckpt_b_auto = False
+
+        if label_setup_error is None:
+            action_a = "Auto-switched" if ckpt_a_auto else "Auto-selected"
+            action_b = "Auto-switched" if ckpt_b_auto else "Auto-selected"
+            st.caption(
+                f"{action_a} A labels: {Path(ckpt_a_labels_csv).name} | "
+                f"checkpoint classes={ckpt_a_classes} | labels={ckpt_a_label_count}"
+            )
+            st.caption(
+                f"{action_b} B labels: {Path(ckpt_b_labels_csv).name} | "
+                f"checkpoint classes={ckpt_b_classes} | labels={ckpt_b_label_count}"
+            )
+        else:
+            st.warning(f"Could not auto-resolve label CSVs: {label_setup_error}")
+
         device_name = st.selectbox(
             "Device",
             options=[get_device_choice(), "cpu", "cuda", "mps"],
@@ -546,8 +624,18 @@ li[role="option"][aria-selected="true"] {
 
         eval_batch_size = st.slider("Eval batch size", min_value=8, max_value=128, value=32, step=8)
 
+    if label_setup_error is not None:
+        st.error(f"Failed to resolve label CSVs: {label_setup_error}")
+        return
+
+    if ckpt_a_labels_csv != ckpt_b_labels_csv:
+        st.error(
+            "Checkpoint A and B use different label CSVs. Compare checkpoints trained on the same species set."
+        )
+        return
+
     try:
-        data = load_frontend_data(dataset_root=dataset_root, artifacts_dir=artifacts_dir)
+        data = load_frontend_data(dataset_root=dataset_root, label_names_path=ckpt_a_labels_csv)
     except Exception as e:
         st.error(f"Failed to load data: {e}")
         return

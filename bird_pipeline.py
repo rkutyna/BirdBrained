@@ -23,12 +23,14 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 IMAGENET_PAD_RGB = tuple(int(round(c * 255)) for c in IMAGENET_MEAN)
 TARGET_SIZE = 240
+DEFAULT_LABEL_NAMES_CSV = "artifacts/label_names.csv"
+ALL_SPECIFIC_LABEL_NAMES_CSV = "artifacts/label_names_nabirds_all_specific.csv"
 
 
 @dataclass
 class PipelineConfig:
     classifier_checkpoint: str
-    label_names_csv: str = "artifacts/label_names.csv"
+    label_names_csv: str = DEFAULT_LABEL_NAMES_CSV
     yolo_weights: str = "yolo11n.pt"
     yolo_conf: float = 0.25
     device: str = "auto"
@@ -74,6 +76,7 @@ class ResultRow:
     pred_species: str | None
     pred_confidence: float | None
     pred_confidence_color: str | None
+    pred_top5: list | None
     original_path: str | None
     classifier_checkpoint: str
     yolo_weights: str
@@ -110,6 +113,110 @@ def resolve_device(device: str) -> str:
 
 def list_classifier_checkpoints(artifacts_dir: str = "artifacts") -> list[str]:
     return sorted(str(p) for p in Path(artifacts_dir).glob("*.pt"))
+
+
+def _unwrap_checkpoint_state(state: Any) -> Any:
+    if isinstance(state, dict):
+        for key in ("state_dict", "model_state_dict"):
+            nested = state.get(key)
+            if isinstance(nested, dict):
+                return nested
+    return state
+
+
+def _checkpoint_num_classes_from_state(state: Any) -> int | None:
+    state_dict = _unwrap_checkpoint_state(state)
+    if not isinstance(state_dict, dict):
+        return None
+
+    for key in ("fc.weight", "fc.1.weight", "module.fc.weight", "module.fc.1.weight"):
+        weight = state_dict.get(key)
+        if isinstance(weight, torch.Tensor) and weight.ndim == 2:
+            return int(weight.shape[0])
+    return None
+
+
+def checkpoint_num_classes(checkpoint_path: str) -> int | None:
+    state = torch.load(checkpoint_path, map_location="cpu")
+    return _checkpoint_num_classes_from_state(state)
+
+
+def read_label_names(label_names_path: str | Path) -> list[str]:
+    path = Path(label_names_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Missing label names CSV: {path}")
+
+    df = pd.read_csv(path)
+    if "species" not in df.columns:
+        raise ValueError(f"Label names CSV must contain a 'species' column: {path}")
+    return df["species"].dropna().astype(str).tolist()
+
+
+def _candidate_label_name_paths(requested_path: str | Path) -> list[Path]:
+    requested = Path(requested_path)
+    candidates = [
+        requested,
+        Path(DEFAULT_LABEL_NAMES_CSV),
+        Path(ALL_SPECIFIC_LABEL_NAMES_CSV),
+    ]
+    if requested.parent.exists():
+        candidates.extend(sorted(requested.parent.glob("label_names*.csv")))
+    artifacts_dir = Path("artifacts")
+    if artifacts_dir.exists():
+        candidates.extend(sorted(artifacts_dir.glob("label_names*.csv")))
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def resolve_label_names_for_checkpoint(
+    checkpoint_path: str,
+    label_names_path: str,
+    expected_num_classes: int | None = None,
+) -> tuple[str, list[str], bool]:
+    requested_path = Path(label_names_path)
+    label_names = read_label_names(requested_path)
+
+    if expected_num_classes is None:
+        expected_num_classes = checkpoint_num_classes(checkpoint_path)
+
+    if expected_num_classes is None or len(label_names) == expected_num_classes:
+        return str(requested_path), label_names, False
+
+    matches: list[tuple[Path, list[str]]] = []
+    available_counts: list[str] = []
+    for candidate in _candidate_label_name_paths(requested_path):
+        if not candidate.exists():
+            continue
+        try:
+            candidate_labels = read_label_names(candidate)
+        except Exception:
+            continue
+        available_counts.append(f"{candidate} ({len(candidate_labels)})")
+        if len(candidate_labels) == expected_num_classes:
+            matches.append((candidate, candidate_labels))
+
+    if len(matches) == 1:
+        resolved_path, resolved_labels = matches[0]
+        return str(resolved_path), resolved_labels, True
+
+    if len(matches) > 1:
+        local_matches = [match for match in matches if match[0].parent == requested_path.parent]
+        if len(local_matches) == 1:
+            resolved_path, resolved_labels = local_matches[0]
+            return str(resolved_path), resolved_labels, True
+
+    raise ValueError(
+        f"Checkpoint expects {expected_num_classes} classes, but label CSV {requested_path} has "
+        f"{len(label_names)}. Available label CSVs: {', '.join(available_counts) or 'none found'}"
+    )
 
 
 def list_jpeg_files_from_folder(folder: str, recursive: bool) -> list[Path]:
@@ -268,19 +375,42 @@ def classifier_transform() -> transforms.Compose:
     )
 
 
+def _build_fc_head(state_dict: dict, in_features: int, num_classes: int) -> nn.Module:
+    """Build the fc head matching the format the checkpoint was saved with."""
+    if "fc.weight" in state_dict:
+        # Old format: bare nn.Linear — keys fc.weight / fc.bias
+        return nn.Linear(in_features, num_classes)
+    # New format: nn.Sequential(Dropout, Linear) — keys fc.1.weight / fc.1.bias
+    return nn.Sequential(
+        nn.Dropout(p=0.4),
+        nn.Linear(in_features, num_classes),
+    )
+
+
 def load_classifier(
     checkpoint_path: str,
     label_names_path: str,
     device: str,
 ) -> tuple[torch.nn.Module, list[str]]:
-    label_names = pd.read_csv(label_names_path)["species"].tolist()
+    state = torch.load(checkpoint_path, map_location="cpu")
+    state_dict = _unwrap_checkpoint_state(state)
+    expected_num_classes = _checkpoint_num_classes_from_state(state_dict)
+
+    _, label_names, _ = resolve_label_names_for_checkpoint(
+        checkpoint_path=checkpoint_path,
+        label_names_path=label_names_path,
+        expected_num_classes=expected_num_classes,
+    )
     num_classes = len(label_names)
 
-    model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    if expected_num_classes is not None and expected_num_classes != num_classes:
+        raise RuntimeError(
+            f"Checkpoint expects {expected_num_classes} classes, but resolved label CSV has {num_classes}."
+        )
 
-    state = torch.load(checkpoint_path, map_location="cpu")
-    model.load_state_dict(state)
+    model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+    model.fc = _build_fc_head(state_dict, model.fc.in_features, num_classes)
+    model.load_state_dict(state_dict)
     model.eval().to(device)
 
     return model, label_names
@@ -706,6 +836,7 @@ def run_inference_batch(
                         pred_species=None,
                         pred_confidence=None,
                         pred_confidence_color=None,
+                        pred_top5=None,
                         sharpness_score_100=None,
                         sharpness_color=None,
                         sharpness_level=None,
@@ -739,6 +870,7 @@ def run_inference_batch(
                         pred_species=None,
                         pred_confidence=None,
                         pred_confidence_color=None,
+                        pred_top5=None,
                         sharpness_score_100=None,
                         sharpness_color=None,
                         sharpness_level=None,
@@ -831,6 +963,7 @@ def run_inference_batch(
                             pred_species=pred["species"],
                             pred_confidence=pred["confidence"],
                             pred_confidence_color=confidence_color(pred["confidence"]),
+                            pred_top5=pred["top5"],
                             original_path=record["original_path"],
                             classifier_checkpoint=config.classifier_checkpoint,
                             yolo_weights=config.yolo_weights,
