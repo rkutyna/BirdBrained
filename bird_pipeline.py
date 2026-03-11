@@ -632,34 +632,56 @@ def write_prediction_metadata(
 
     conf_level = confidence_level(confidence) or "unknown"
     comment = _prediction_comment(species, confidence, checkpoint_path, run_id)
-    hierarchical_keywords = [
-        _hierarchical_keyword(["Species", species]),
-        _hierarchical_keyword(["Species Confidence", conf_level]),
-    ]
     if sharpness_score_100 is not None:
-        hierarchical_keywords.append(
-            _hierarchical_keyword(["Sharpness Score", f"{sharpness_score_100:.1f}"])
-        )
-        if sharpness_level_name:
-            hierarchical_keywords.append(_hierarchical_keyword(["Sharpness", sharpness_level_name]))
         comment = f"{comment}; sharpness_score={sharpness_score_100:.1f}/100"
         if sharpness_level_name:
             comment = f"{comment}; sharpness_level={sharpness_level_name}"
 
-    cmd = [
+    # Hierarchical keywords drive the keyword tree in Lightroom's Keyword List panel.
+    # Format: "Parent|Child"  — Lightroom displays as Parent > Child
+    hierarchical_keywords = [
+        _hierarchical_keyword(["Species", species]),
+        _hierarchical_keyword(["Confidence", conf_level]),
+    ]
+    if sharpness_level_name:
+        hierarchical_keywords.append(_hierarchical_keyword(["Sharpness", sharpness_level_name]))
+
+    # Flat keywords populate Lightroom's Keywords panel.
+    # Include the parent label so each keyword is self-describing without the tree.
+    flat_keywords = [_keyword_component(species)]
+    flat_keywords.append(f"Confidence: {_keyword_component(conf_level)}")
+    if sharpness_level_name:
+        flat_keywords.append(f"Sharpness: {_keyword_component(sharpness_level_name)}")
+
+    # Step 1: delete existing keyword tags so re-runs never accumulate duplicates.
+    # XMP list tags always append with =, so a separate delete pass is required.
+    clear_cmd = [
         exiftool,
         "-overwrite_original",
         "-m",
-        "-api",
-        "NoDups=1",
+        "-XMP-lr:HierarchicalSubject=",
+        "-XMP-dc:Subject=",
+        "-IPTC:Keywords=",
+        str(target),
+    ]
+    # Step 2: write fresh keyword tags and update comment + IPTC digest.
+    write_cmd = [
+        exiftool,
+        "-overwrite_original",
+        "-m",
         f"-EXIF:UserComment={comment}",
     ]
     for keyword in hierarchical_keywords:
-        cmd.append(f"-XMP-lr:HierarchicalSubject+={keyword}")
-    cmd.append(str(target))
+        write_cmd.append(f"-XMP-lr:HierarchicalSubject+={keyword}")
+    for keyword in flat_keywords:
+        write_cmd.append(f"-XMP-dc:Subject+={keyword}")
+        write_cmd.append(f"-IPTC:Keywords+={keyword}")
+    write_cmd.append("-IPTCDigest=new")
+    write_cmd.append(str(target))
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(clear_cmd, check=True, capture_output=True, text=True)
+        subprocess.run(write_cmd, check=True, capture_output=True, text=True)
         return True, "exiftool", None
     except subprocess.CalledProcessError as e:
         message = (e.stderr or e.stdout or str(e)).strip()
