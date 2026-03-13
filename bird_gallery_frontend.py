@@ -726,7 +726,7 @@ def _launch_next_job() -> bool:
     log_path = LOGS_DIR / f"training_{job_id}.log"
     log_f = open(log_path, "w")
     proc = subprocess.Popen(
-        [sys.executable, "training_engine.py", "--job-id", job_id],
+        [sys.executable, "-u", "training_engine.py", "--job-id", job_id],
         stdout=log_f,
         stderr=log_f,
     )
@@ -854,6 +854,9 @@ def _render_queue_dashboard() -> bool:
             stage = progress.get("stage", 0)
             epoch = progress.get("epoch", 0)
             total_epochs = progress.get("total_epochs", 1)
+            phase = progress.get("phase")
+            batch = progress.get("batch", 0)
+            total_batches = progress.get("total_batches", 0)
             train_acc = progress.get("train_acc")
             val_acc = progress.get("val_acc")
             best_val = progress.get("best_val_acc")
@@ -861,8 +864,29 @@ def _render_queue_dashboard() -> bool:
             if status == "loading_data":
                 st.info("Loading dataset...")
             elif status in ("running", "starting"):
-                frac = epoch / max(1, total_epochs)
-                label = f"Stage {stage} | Preparing..." if epoch == 0 else f"Stage {stage} | Epoch {epoch}/{total_epochs}"
+                # Smooth progress: completed epochs + within-epoch batch progress
+                if epoch == 0 and not phase:
+                    frac = 0.0
+                    label = f"Stage {stage} | Preparing..."
+                elif phase and total_batches > 0:
+                    batch_frac = batch / total_batches
+                    # Training ~80% of epoch wall time, validation ~20%
+                    if phase == "train":
+                        epoch_progress = batch_frac * 0.8
+                    else:
+                        epoch_progress = 0.8 + batch_frac * 0.2
+                    frac = ((epoch - 1) + epoch_progress) / max(1, total_epochs)
+                    frac = min(max(frac, 0.0), 1.0)
+                    phase_label = "Training" if phase == "train" else "Validating"
+                    label = (
+                        f"Stage {stage} | Epoch {epoch}/{total_epochs}"
+                        f" — {phase_label} ({batch}/{total_batches})"
+                    )
+                else:
+                    # Epoch just completed (phase=None)
+                    frac = epoch / max(1, total_epochs)
+                    label = f"Stage {stage} | Epoch {epoch}/{total_epochs}"
+
                 st.progress(frac, text=label)
                 pm1, pm2, pm3 = st.columns(3)
                 if train_acc is not None:

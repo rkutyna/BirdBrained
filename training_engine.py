@@ -399,6 +399,7 @@ def _run_epoch(
     criterion: nn.Module,
     device: torch.device,
     optimizer=None,
+    progress_fn: Any = None,
 ) -> tuple[float, float, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -406,9 +407,11 @@ def _run_epoch(
     running_correct = 0
     running_total = 0
     t0 = time.perf_counter()
+    total_batches = len(loader)
+    report_every = max(1, total_batches // 20)  # ~20 updates per epoch
 
     with torch.set_grad_enabled(is_train):
-        for images, targets in loader:
+        for batch_idx, (images, targets) in enumerate(loader, 1):
             images = images.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
             if is_train:
@@ -426,6 +429,14 @@ def _run_epoch(
             running_loss += loss.item() * targets.size(0)
             running_correct += int(preds.eq(targets).sum())
             running_total += targets.size(0)
+
+            if progress_fn and (batch_idx % report_every == 0 or batch_idx == total_batches):
+                progress_fn(
+                    batch=batch_idx,
+                    total_batches=total_batches,
+                    running_loss=running_loss / max(1, running_total),
+                    running_acc=running_correct / max(1, running_total),
+                )
 
     avg_loss = running_loss / max(1, running_total)
     avg_acc = running_correct / max(1, running_total)
@@ -479,8 +490,32 @@ def _train_stage(
     best_state: dict | None = None
 
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc, _ = _run_epoch(model, train_loader, criterion, device, optimizer)
-        val_loss, val_acc, _ = _run_epoch(model, val_loader, criterion, device)
+
+        def _batch_progress(phase: str, *, batch, total_batches, running_loss, running_acc):
+            data = {
+                **progress_base,
+                "stage": stage_num,
+                "epoch": epoch,
+                "total_epochs": epochs,
+                "phase": phase,
+                "batch": batch,
+                "total_batches": total_batches,
+                "best_val_acc": round(best_val_acc, 6) if best_val_acc >= 0 else None,
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            # Use phase-specific keys so the frontend can show the right metric
+            data[f"{phase}_acc"] = round(running_acc, 6)
+            data[f"{phase}_loss"] = round(running_loss, 6)
+            _write_progress(job_id, data)
+
+        train_loss, train_acc, _ = _run_epoch(
+            model, train_loader, criterion, device, optimizer,
+            progress_fn=lambda **kw: _batch_progress("train", **kw),
+        )
+        val_loss, val_acc, _ = _run_epoch(
+            model, val_loader, criterion, device,
+            progress_fn=lambda **kw: _batch_progress("val", **kw),
+        )
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
@@ -491,6 +526,7 @@ def _train_stage(
             "stage": stage_num,
             "epoch": epoch,
             "total_epochs": epochs,
+            "phase": None,
             "train_loss": round(train_loss, 6),
             "train_acc": round(train_acc, 6),
             "val_loss": round(val_loss, 6),

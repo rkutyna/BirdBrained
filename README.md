@@ -1,55 +1,120 @@
 # Bird Photography Processing Pipeline
 
-This repository contains a bird-photo workflow that:
+An end-to-end system for detecting, classifying, and cataloging bird species in personal photography. The pipeline combines YOLO object detection with a fine-tuned ResNet-50 classifier, a patch-based sharpness scorer, and optional Lightroom metadata tagging — all driven from Streamlit applications for inference, training, evaluation, and photo labeling.
 
-1. Detects birds in photos with YOLO.
-2. Crops the best bird detection per image.
-3. Classifies bird species with a fine-tuned ResNet-50 model.
-4. Scores bird-crop sharpness using patch-based Tenengrad (Sobel energy).
-5. Writes prediction metadata to original JPEGs (for Lightroom search/filtering) when processing local folders.
-6. Evaluates prediction accuracy against manually labeled ground truth.
+## What It Does
 
-## Main Components
+Given a folder (or upload) of bird photos, the pipeline:
 
-- `bird_pipeline.py`: Core batch pipeline (load models, detect, crop, classify, metadata tagging, exports).
-- `bird_gallery_frontend.py`: Streamlit app for running inference, browsing run outputs, training management, and accuracy evaluation.
-- `nabirds_frontend.py`: Streamlit app for checkpoint comparison/evaluation on NABirds test data.
-- `training_engine.py`: Training pipeline with job queue, per-epoch progress tracking, and cancel support.
-- `label_photos.py`: Streamlit app for manually labeling personal photos with species names.
-- `eval_missing_checkpoints.py`: Script to retroactively evaluate `.pt` checkpoints not yet in `run_summary.csv`.
-- `yolo_test.py`: Standalone YOLO utility for detection and crop extraction.
-- `artifacts/`: Model checkpoints, label maps, logs, and pipeline run outputs.
-- `NABirds Dataset/nabirds/`: NABirds metadata and images used for training/evaluation.
+1. **Detects** birds using YOLO, keeping the highest-confidence detection per image.
+2. **Crops** the detected bird at full resolution.
+3. **Classifies** the crop into one of 98 target species (or 555 NABirds-specific classes) using a fine-tuned ResNet-50.
+4. **Scores sharpness** of each bird crop using patch-based Tenengrad (Sobel gradient energy).
+5. **Tags original JPEGs** with species, confidence, and sharpness metadata for Lightroom search and filtering.
+6. **Evaluates accuracy** against manually labeled ground truth when available.
 
-## Pipeline Flow
+## Architecture
 
-For each input image:
+```
+                    ┌──────────────┐
+    Input JPEGs ──▸ │  YOLO 11n    │──▸ Best bird bbox per image
+                    └──────────────┘
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │  Full-res    │──▸ Bird crop (original resolution)
+                    │  Crop        │
+                    └──────────────┘
+                           │
+                    ┌──────┴──────┐
+                    ▼             ▼
+            ┌──────────────┐ ┌──────────────┐
+            │  ResNet-50   │ │  Tenengrad   │
+            │  Classifier  │ │  Sharpness   │
+            └──────────────┘ └──────────────┘
+                    │             │
+                    ▼             ▼
+            Species top-5    Sharpness 0-100
+            + confidence     + level/color
+                    │             │
+                    └──────┬──────┘
+                           ▼
+                    ┌──────────────┐
+                    │  exiftool    │──▸ Tagged JPEG (XMP + EXIF + IPTC)
+                    │  Metadata    │
+                    └──────────────┘
+```
 
-1. Load image and save a copied original into the run directory.
-2. Run YOLO and keep the highest-confidence detection with class name `bird`.
-3. Crop bounding box from the full-resolution image.
-4. Resize+pad crop to `240x240`, normalize with ImageNet stats.
-5. Compute patch-based Tenengrad on the crop:
-   - Window size = 10% of crop width (square window)
-   - Stride = 50% of window size
-   - Final score = mean of top-5 patch scores
-   - Normalize to a `0-100` sharpness score using run-level percentile calibration (`p5 -> 0`, `p95 -> 100`)
-   - Assign level/color using same thresholds as prediction confidence:
-     - `low` / red: `< 40`
-     - `medium` / yellow: `40-75`
-     - `high` / green: `> 75`
-6. Run ResNet classifier and return top-5 species + confidences (top-1 used for display).
-7. Optionally tag original local JPEG metadata via `exiftool` (including sharpness).
-8. Save run outputs (`results.csv`, `results.json`, crops, logs, errors if any).
+### Model Details
+
+- **Detection**: YOLO 11n (`yolo11n.pt`), filtering for `"bird"` class detections.
+- **Classification**: ResNet-50 pretrained on ImageNet V2, fine-tuned on [NABirds](https://dl.allawnmilner.com/nabirds) with a `Sequential(Dropout(0.4), Linear)` head.
+- **Training strategy**: Three-stage progressive unfreezing:
+  1. **Stage 1** — Head only (fc layer), backbone frozen.
+  2. **Stage 2** — `layer4` + fc unfrozen, lower learning rate.
+  3. **Stage 3** — `layer3` + `layer4` + fc unfrozen, lowest learning rate.
+- **Sharpness**: Patch-based Tenengrad scoring — Sobel gradient energy computed over sliding windows (10% of crop width, 50% stride), final score = mean of top-5 patches. Normalized per-run to 0–100 using p5/p95 percentile bounds.
+
+### Confidence and Sharpness Thresholds
+
+| Level  | Color  | Confidence range | Sharpness range |
+|--------|--------|------------------|-----------------|
+| High   | Green  | > 75%            | > 75            |
+| Medium | Yellow | 40–75%           | 40–75           |
+| Low    | Red    | < 40%            | < 40            |
+
+## Project Structure
+
+```
+capstone/
+├── bird_pipeline.py              Core inference pipeline (detection, classification, sharpness, metadata)
+├── bird_gallery_frontend.py      Main Streamlit app (Classify + Training tabs)
+├── training_engine.py            Training pipeline with job queue (runs as subprocess)
+├── nabirds_frontend.py           Checkpoint comparison app (NABirds test split)
+├── label_photos.py               Manual photo labeling tool
+├── eval_missing_checkpoints.py   Retroactive checkpoint evaluation script
+├── yolo_test.py                  Standalone YOLO detection utility
+├── .streamlit/config.toml        Streamlit theme configuration
+│
+├── artifacts/
+│   ├── label_names.csv                        98 target species
+│   ├── label_names_nabirds_all_specific.csv   555 NABirds-specific classes (incl. sex/morph)
+│   ├── label_names_nabirds_base_species.csv   404 base species (variants collapsed)
+│   ├── *.pt                                   ResNet-50 checkpoints
+│   ├── logs/
+│   │   ├── run_summary.csv        Training run history (accuracy, hyperparams, checkpoint paths)
+│   │   ├── epoch_metrics.csv      Per-epoch train/val metrics
+│   │   ├── run_configs.jsonl      Full config snapshots per run
+│   │   ├── run_queue.json         Current training job queue
+│   │   ├── progress_*.json        Real-time job progress (read by frontend)
+│   │   └── training_*.log         Per-job subprocess logs
+│   └── pipeline_runs/<run_id>/
+│       ├── originals/             Copied input images
+│       ├── crops/                 Detected bird crops
+│       ├── results.csv            Structured per-image results (incl. top-5)
+│       ├── results.json           JSON export
+│       ├── errors.csv             Error log (if any)
+│       └── pipeline.log           Detailed execution log
+│
+├── NABirds Dataset/nabirds/       NABirds metadata and images (not tracked in git)
+│
+├── resnet.ipynb                   ResNet training/fine-tuning notebook
+├── overnight.ipynb                Extended training experiments
+├── bird_infer_pipeline.ipynb      Inference pipeline development notebook
+├── forest_vis.ipynb               NABirds forest/hierarchy visualization
+└── vit_test.ipynb                 Vision Transformer experiments
+```
 
 ## Requirements
 
 ### System
 
-- Python 3.10+ recommended
-- `exiftool` (required only for metadata tagging to original files)
+- Python 3.10+
+- `exiftool` — required only for metadata tagging to original JPEGs
+  - macOS: `brew install exiftool`
+  - Ubuntu: `sudo apt install libimage-exiftool-perl`
 
-### Python packages
+### Python Packages
 
 ```bash
 python3 -m venv .venv
@@ -58,135 +123,143 @@ pip install --upgrade pip
 pip install numpy pandas pillow streamlit ultralytics torch torchvision
 ```
 
-Optional (needed only for RAW `.nef` handling in `yolo_test.py`):
+Optional (RAW `.nef` handling in `yolo_test.py` only):
 
 ```bash
 pip install rawpy
 ```
 
-## Running Inference (Primary App)
+### Data
 
-Launch the Streamlit gallery app:
+Training and evaluation require the [NABirds dataset](https://dl.allawnmilner.com/nabirds) extracted to `NABirds Dataset/nabirds/`. Inference on personal photos does not require this dataset — only a trained checkpoint (`.pt` file) in `artifacts/`.
+
+## Running Inference (Primary App)
 
 ```bash
 streamlit run bird_gallery_frontend.py
 ```
 
-The app has two tabs:
+### Classify Tab
 
-### Classify tab
+Configure in the sidebar:
 
-In the sidebar:
+- **Classifier checkpoint** — select from `artifacts/*.pt`. The sidebar displays the recorded test accuracy from `run_summary.csv` when available.
+- **Species mode** — toggle between 98 target species or 555 all-specific NABirds classes. Checkpoints are filtered to match.
+- **YOLO settings** — weights path, confidence threshold, batch size.
+- **Input mode**:
+  - *Upload files* — drag-and-drop JPEGs (metadata tagging unavailable).
+  - *Folder path* — process JPEGs from a local directory, optionally recursive.
+- **Metadata tagging** — toggle writing predictions to original JPEGs (folder mode only).
 
-- Select a classifier checkpoint (`artifacts/*.pt`). The sidebar shows the recorded test accuracy for the selected checkpoint.
-- Set YOLO weights and confidence threshold.
-- Choose input mode:
-  - `Upload files`: process uploaded JPEGs.
-  - `Folder path`: process JPEGs from a local folder (supports recursive scan).
-- Toggle metadata tagging:
-  - Tagging is applied only in `Folder path` mode.
-  - Upload mode cannot tag original files by design.
+**Results include:**
 
-If the input folder contains a `labels.csv` (created by `label_photos.py`), the run summary automatically shows ground-truth accuracy metrics:
+- Summary metrics: total images, birds detected, mean confidence, mean sharpness, mean crop megapixels.
+- Paginated photo gallery with original + crop side-by-side, species prediction, confidence badge, sharpness score, top-5 list.
+- CSV and JSON export downloads.
 
-- **Top-1 accuracy** and **Top-5 accuracy** computed against your labels.
-- Per-photo verdict badges in the gallery: ✓ Correct, ✗ Wrong, ⊘ no bird detected, ⊘ not in model subset.
-- Photos where no bird was detected, or whose labeled species is not in the model's training set, are excluded from the accuracy denominator.
-- Predictions are compared at the base-species level — sex/morph qualifiers (e.g. "Breeding male") are stripped before matching.
+**Ground-truth evaluation** — if the input folder contains a `labels.csv` (created by the labeling tool), the app automatically computes:
 
-### Training tab
+- Top-1 and Top-5 accuracy against your labels.
+- Per-photo verdict badges: ✓ Correct, ✗ Wrong, ⊘ no bird detected, ⊘ not in model subset.
+- Photos with no detection or out-of-scope species are excluded from the accuracy denominator.
+- Predictions are compared at the base-species level (sex/morph qualifiers like "Breeding male" are stripped).
+- Gallery filtering by verdict: Correct, Wrong, No bird detected, Not in model subset, Unlabeled.
 
-Manage and monitor ResNet-50 fine-tuning runs directly from the browser:
+### Training Tab
 
-- Define single runs or multiplicative parameter sweeps.
-- Jobs run sequentially in a background subprocess; the browser stays responsive.
-- Live per-epoch progress (train/val accuracy) is shown while a job runs.
-- Cancel a running job or remove pending jobs from the queue individually.
-- Run history is pulled from `artifacts/logs/run_summary.csv` with filtering and sorting.
+Manage ResNet-50 fine-tuning runs from the browser:
+
+- **Single runs** — configure all hyperparameters (per-stage epochs/LR, augmentation, weight decay, label smoothing, batch size, seed).
+- **Parameter sweeps** — vary one parameter multiplicatively across a range (e.g., stage1_lr from 1e-2 to 1e-4 at 0.1× steps). All other parameters come from a base config.
+- **Job queue** — jobs run sequentially as background subprocesses. The browser stays responsive with 3-second auto-refresh.
+- **Live progress** — batch-level progress bar (updates ~20 times per epoch), showing current phase (Training/Validating), batch count, and running accuracy as it climbs.
+- **Controls** — cancel a running job (stops after current epoch) or remove pending jobs individually. Clear finished jobs in bulk.
+- **Run history** — table from `run_summary.csv` with stage filtering, sorted by test accuracy.
+
+**Three-stage training:**
+
+| Stage | Unfrozen layers          | Typical LR | Purpose                           |
+|-------|--------------------------|------------|-----------------------------------|
+| 1     | FC head only             | 1e-3       | Learn species mapping on frozen features |
+| 2     | `layer4` + FC            | 2e-4       | Adapt high-level features          |
+| 3     | `layer3` + `layer4` + FC | 1e-4       | Fine-tune mid-level features       |
+
+Each stage saves a checkpoint, evaluates on the test split, and records results to `run_summary.csv`. The best checkpoint is auto-selected by test accuracy when starting inference.
 
 ## Photo Labeling Tool
-
-To manually label a folder of personal photos for accuracy testing:
 
 ```bash
 streamlit run label_photos.py
 ```
 
+Create ground-truth labels for accuracy evaluation:
+
 - Enter a folder path to load all images.
-- Navigate photos one at a time with Prev/Next buttons or jump to the next unlabeled image.
-- Search and select a species from the 404 top-level NABirds species (sex/morph variants collapsed).
-- Labels are saved to `labels.csv` in the same folder and are picked up automatically by the inference app.
+- Navigate with Prev/Next or jump to the next unlabeled photo.
+- Search and select from 404 top-level NABirds species (sex/morph variants collapsed).
+- Labels save to `labels.csv` in the folder, picked up automatically by the inference app.
 
-## Metadata for Lightroom
-
-When enabled and supported (`Folder path` + `exiftool` available), the pipeline writes:
-
-- `XMP-lr:HierarchicalSubject` keywords
-- `EXIF:UserComment`
-
-Keyword paths are hierarchical (using Lightroom's `|` separators):
-
-- `Species|<predicted species>`
-- `Species Confidence|<high|medium|low>`
-- `Sharpness Score|<0-100>`
-- `Sharpness|<high|medium|low>`
-
-## Run Outputs
-
-Each run creates a timestamped folder under `artifacts/pipeline_runs/<run_id>/`:
-
-- `originals/`: copied originals used for the run
-- `crops/`: detected bird crops
-- `results.csv`: row-level structured outputs (includes top-5 predictions)
-- `results.json`: JSON export of results
-- `errors.csv`: written when errors occur
-- `pipeline.log`: detailed execution log
-
-## Checkpoint Evaluation / Comparison
-
-To compare checkpoints on the NABirds test split:
+## Checkpoint Comparison
 
 ```bash
 streamlit run nabirds_frontend.py
 ```
 
-This app provides:
+Compare checkpoints side-by-side on the NABirds test split:
 
-- Top-5 prediction comparison on selected test images
-- Full test evaluation (top-1 / top-5)
-- Per-species top-1 accuracy tables
+- Browse test images with top-5 predictions from two checkpoints (A vs B).
+- Run full test evaluation (top-1 and top-5 accuracy).
+- Per-species accuracy breakdown with filtering (e.g., show lowest-performing species).
 
-To evaluate any `.pt` checkpoint files not yet recorded in `run_summary.csv`:
+To retroactively evaluate checkpoints not yet in `run_summary.csv`:
 
 ```bash
 python eval_missing_checkpoints.py
 ```
 
-## Training
+## Metadata for Lightroom
 
-### Via the browser (recommended)
+When metadata tagging is enabled (folder mode + `exiftool` available), the pipeline writes to each original JPEG:
 
-Use the Training tab in `bird_gallery_frontend.py` (see above).
+| Field | Content |
+|-------|---------|
+| `XMP-lr:HierarchicalSubject` | Lightroom hierarchical keywords (pipe-separated) |
+| `XMP-dc:Subject` | Flat keywords |
+| `IPTC:Keywords` | Flat keywords (legacy compatibility) |
+| `EXIF:UserComment` | Human-readable prediction summary |
 
-### Via notebook
+**Hierarchical keyword structure** (visible in Lightroom's keyword tree):
 
-- `resnet.ipynb`: ResNet training/fine-tuning workflow
+```
+Species|American Robin
+Species Confidence|High
+Sharpness Score|82
+Sharpness|High
+```
 
-Training metrics and configs are tracked in:
-
-- `artifacts/logs/run_summary.csv`
-- `artifacts/logs/epoch_metrics.csv`
-- `artifacts/logs/run_configs.jsonl`
+Tags are written in a two-pass approach: old prediction tags are cleared first, then fresh tags are written. This makes re-running inference on the same folder safe — predictions are always current.
 
 ## Species Label Files
 
 | File | Classes | Description |
-|---|---|---|
-| `artifacts/label_names.csv` | 98 | Target species subset used for most training runs |
+|------|---------|-------------|
+| `artifacts/label_names.csv` | 98 | Target species subset — used for most training runs |
 | `artifacts/label_names_nabirds_all_specific.csv` | 555 | All NABirds-specific classes including sex/morph variants |
-| `artifacts/label_names_nabirds_base_species.csv` | 404 | Top-level species names (variants collapsed) — used by the labeling tool |
+| `artifacts/label_names_nabirds_base_species.csv` | 404 | Top-level species (variants collapsed) — used by the labeling tool |
+
+## Standalone Utilities
+
+### YOLO Detection (`yolo_test.py`)
+
+```bash
+python yolo_test.py <source_folder> [--imgsz 1280] [--device mps] [--recursive]
+```
+
+Standalone bird detection with crop extraction. Supports JPEG, PNG, BMP, TIFF, and RAW `.nef` files (with `rawpy`). Saves top-3 bird crops per image.
 
 ## Notes
 
-- Classifier checkpoints saved with either a bare `nn.Linear` head or an `nn.Sequential(Dropout, Linear)` head are both handled automatically.
-- YOLO bird detection relies on class name matching to `"bird"` in YOLO outputs.
+- Classifier checkpoints with either a bare `nn.Linear` head or `nn.Sequential(Dropout, Linear)` head are detected and loaded automatically.
+- The checkpoint auto-selector picks the checkpoint with the highest test accuracy from `run_summary.csv`, falling back to stage-rank heuristic (stage 3 > stage 2 > stage 1) if no summary data exists.
+- YOLO detection filters by class name `"bird"` — non-bird detections are discarded.
+- Training runs as a subprocess (`python training_engine.py --job-id <id>`), communicating progress via JSON files on disk. This keeps the Streamlit frontend responsive during long training runs.
