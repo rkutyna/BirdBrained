@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 1800  # 30 minutes
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "cap stage2 at 6 to reach stage3"
+NOTES = "enable TTA"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -122,7 +122,7 @@ EMA_DECAY = 0.999  # higher = more smoothing; 0.999 standard for ~10k samples
 GRAD_CLIP_NORM = 0.0  # 0 = off; try 1.0 to stabilize unfreezing stages
 
 # --- Test-time augmentation (TTA) ---
-USE_TTA = False  # horizontal flip TTA at final evaluation only (free accuracy)
+USE_TTA = True  # horizontal flip TTA at final evaluation only (free accuracy)
 
 # --- Learning rate warmup ---
 WARMUP_EPOCHS = 0  # 0 = off; try 2. Linear warmup per stage before scheduler
