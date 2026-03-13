@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ast
 import logging
+import re
 import subprocess
 import sys
 import time
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -28,6 +31,7 @@ from training_engine import (
     QUEUE_JSON,
     SUMMARY_CSV,
     TrainingConfig,
+    _update_queue_status,
     add_to_queue,
     cancel_running_job,
     clear_finished_jobs,
@@ -52,6 +56,16 @@ def confidence_badge(conf: float | None, color_name: str | None) -> str:
     return f'<span class="badge" style="background:{color};">{conf*100:.1f}%</span>'
 
 
+_VERDICT_STYLE = (
+    "color:#fff;border-radius:999px;padding:0.15rem 0.6rem;"
+    "font-weight:700;font-size:0.8rem;"
+)
+
+
+def _verdict_badge(bg_color: str, text: str) -> str:
+    return f'<span style="background:{bg_color};{_VERDICT_STYLE}">{text}</span>'
+
+
 def crop_megapixels_from_row(row: pd.Series) -> float | None:
     try:
         x1 = float(row.get("bbox_x1"))
@@ -69,168 +83,55 @@ def crop_megapixels_from_row(row: pd.Series) -> float | None:
 
 
 def apply_css() -> None:
+    # The base light theme (colors, fonts, widget styling) is declared in
+    # .streamlit/config.toml so Streamlit renders everything consistently in
+    # light mode without CSS fighting the defaults.  This stylesheet only adds
+    # things config.toml cannot express: the gradient background, inline-code
+    # appearance, dropdown portal menus (rendered outside Streamlit's theme
+    # scope), the caret color fix, and the custom badge/card classes.
     st.markdown(
         """
 <style>
-:root {
-  --main-bg: #f7fbf8;
-  --main-text: #1f3b2f;
-  --side-bg: #e8f3ec;
-  --side-text: #163528;
-  --input-bg: #ffffff;
-  --input-text: #163528;
-}
-
-html, body {
-  color-scheme: light !important;
-}
-
+/* Subtle gradient on the main canvas */
 .stApp {
-  background: radial-gradient(1200px 500px at 10% -10%, #e8f5ec 0%, var(--main-bg) 60%);
-  color: var(--main-text) !important;
-  color-scheme: light !important;
+  background: radial-gradient(1200px 500px at 10% -10%, #e8f5ec 0%, #f7fbf8 60%);
 }
 
-/* Main content readability */
-[data-testid="stAppViewContainer"],
-[data-testid="stAppViewContainer"] * {
-  color: var(--main-text) !important;
+/* Inline code: tinted background so backtick spans are distinct but readable */
+[data-testid="stMarkdownContainer"] code {
+  background: #dceee3 !important;
+  color: #1a3829 !important;
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
 }
 
-[data-testid="stMarkdownContainer"],
-[data-testid="stMarkdownContainer"] *,
-[data-testid="stText"],
-[data-testid="stText"] *,
-[data-testid="stCaptionContainer"],
-[data-testid="stCaptionContainer"] * {
-  color: var(--main-text) !important;
-}
-
-/* Sidebar readability */
-section[data-testid="stSidebar"] {
-  background: var(--side-bg) !important;
-  border-right: 1px solid #d3e4d8;
-  color-scheme: light !important;
-}
-
-section[data-testid="stSidebar"],
-section[data-testid="stSidebar"] * {
-  color: var(--side-text) !important;
-}
-
-/* Inputs/selects: ensure readable text and neutral background */
-[data-baseweb="input"] > div,
-[data-baseweb="select"] > div,
+/* Explicit caret so the text cursor is visible in inputs */
 input, textarea {
-  background: var(--input-bg) !important;
-  color: var(--input-text) !important;
+  caret-color: #1f3b2f !important;
 }
 
-[data-baseweb="select"] *,
-[data-baseweb="input"] *,
-[data-baseweb="slider"] * {
-  color: var(--input-text) !important;
-}
-
-/* Force light surfaces for widgets that can inherit dark-mode backgrounds */
-[data-testid="stTextInput"] [data-baseweb="input"] > div,
-[data-testid="stNumberInput"] [data-baseweb="input"] > div,
-[data-testid="stSelectbox"] [data-baseweb="select"] > div,
-[data-testid="stTextArea"] [data-baseweb="textarea"] > div {
-  background: #ffffff !important;
-  border: 1px solid #b7d3c3 !important;
-  border-radius: 10px !important;
-}
-
-[data-testid="stSelectbox"] [role="combobox"],
-[data-testid="stSelectbox"] span,
-[data-testid="stSelectbox"] div,
-[data-testid="stNumberInput"] input,
-[data-testid="stTextInput"] input,
-[data-testid="stTextArea"] textarea {
-  color: #163528 !important;
-}
-
-[data-testid="stSelectbox"] svg,
-[data-testid="stNumberInput"] svg {
-  color: #163528 !important;
-  fill: currentColor !important;
-}
-
-/* Number input +/- buttons */
-[data-testid="stNumberInput"] button {
-  background: #e6f4eb !important;
-  color: #163528 !important;
-  border-left: 1px solid #b7d3c3 !important;
-}
-[data-testid="stNumberInput"] button:hover {
-  background: #dcefe3 !important;
-}
-[data-testid="stNumberInput"] button:disabled {
-  background: #f1f5f2 !important;
-  color: #6c7f74 !important;
-}
-
-/* Header/toolbar readability */
-header[data-testid="stHeader"] {
-  background: #e8f3ec !important;
-  border-bottom: 1px solid #d3e4d8 !important;
-}
-header[data-testid="stHeader"] * {
-  color: #163528 !important;
-}
-[data-testid="stToolbar"] * {
-  color: #163528 !important;
-}
-
-/* File uploader readability */
-[data-testid="stFileUploaderDropzone"] {
-  background: #ffffff !important;
-  border: 1px dashed #b7d3c3 !important;
-  border-radius: 12px !important;
-}
-[data-testid="stFileUploaderDropzone"] * {
-  color: #163528 !important;
-}
-[data-testid="stFileUploaderDropzoneInstructions"] * {
-  color: #274c3a !important;
-}
-[data-testid="stBaseButton-secondary"] {
-  background: #e6f4eb !important;
-  color: #163528 !important;
-  border: 1px solid #b7d3c3 !important;
-}
-[data-testid="stBaseButton-secondary"] * {
-  color: #163528 !important;
-}
-
-/* Dropdown menu options (portal) */
-div[role="listbox"],
-ul[role="listbox"] {
-  background: #ffffff !important;
-  color: #163528 !important;
-  border: 1px solid #b7d3c3 !important;
-}
+/* Dropdown portal menus render outside .stApp so they don't inherit the
+   Streamlit theme; force them to match the light palette manually. */
 div[data-baseweb="popover"],
 div[data-baseweb="menu"] {
   background: #ffffff !important;
+}
+div[role="listbox"], ul[role="listbox"] {
+  background: #ffffff !important;
+  border: 1px solid #b7d3c3 !important;
+}
+div[role="option"], li[role="option"] {
+  background: #ffffff !important;
   color: #163528 !important;
 }
-div[role="option"],
-li[role="option"] {
-  color: var(--input-text) !important;
-  background: #ffffff !important;
-}
-div[role="option"][aria-selected="true"],
-li[role="option"][aria-selected="true"] {
-  background: #e6f4eb !important;
-  color: #103524 !important;
-}
-div[role="option"]:hover,
-li[role="option"]:hover {
+div[role="option"]:hover, li[role="option"]:hover {
   background: #f1f9f4 !important;
-  color: #103524 !important;
 }
+div[role="option"][aria-selected="true"], li[role="option"][aria-selected="true"] {
+  background: #e6f4eb !important;
+}
+
+/* Custom badge and card classes used in the gallery */
 .badge {
   display: inline-block;
   color: white;
@@ -390,7 +291,6 @@ def render_summary(df: pd.DataFrame) -> None:
             in_model_mask = df["label_in_model"] == True
             correct = int((df.loc[in_model_mask, "is_correct"] == True).sum())
             wrong = int((df.loc[in_model_mask, "is_correct"] == False).sum())
-            out_of_scope = int((df["label_in_model"] == False).sum())
             evaluable = correct + wrong
             accuracy = correct / evaluable if evaluable > 0 else None
 
@@ -431,14 +331,19 @@ def render_summary(df: pd.DataFrame) -> None:
 def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
     show_df = df.copy()
 
-    filter_cols = st.columns(2) if "ground_truth" in show_df.columns else [st]
-    species_options = ["(all)"] + sorted(x for x in show_df["pred_species"].dropna().unique().tolist())
-    species_filter = filter_cols[0].selectbox("Filter by predicted species", options=species_options)
+    has_ground_truth = "ground_truth" in show_df.columns and show_df["ground_truth"].notna().any()
+    if has_ground_truth:
+        col_species, col_verdict = st.columns(2)
+    else:
+        col_species = st
+
+    species_options = ["(all)"] + sorted(show_df["pred_species"].dropna().unique())
+    species_filter = col_species.selectbox("Filter by predicted species", options=species_options)
     if species_filter != "(all)":
         show_df = show_df[show_df["pred_species"] == species_filter].copy()
 
-    if "ground_truth" in show_df.columns and show_df["ground_truth"].notna().any():
-        verdict_filter = filter_cols[1].selectbox(
+    if has_ground_truth:
+        verdict_filter = col_verdict.selectbox(
             "Filter by verdict",
             options=["(all)", "Correct", "Wrong", "No bird detected", "Not in model subset", "Unlabeled"],
         )
@@ -551,13 +456,13 @@ def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
                     is_correct = row.get("is_correct")
                     if not in_model:
                         if not row.get("yolo_detected", True):
-                            verdict = '<span style="background:#64748b;color:#fff;border-radius:999px;padding:0.15rem 0.6rem;font-weight:700;font-size:0.8rem;">⊘ no bird detected</span>'
+                            verdict = _verdict_badge("#64748b", "⊘ no bird detected")
                         else:
-                            verdict = '<span style="background:#b45309;color:#fff;border-radius:999px;padding:0.15rem 0.6rem;font-weight:700;font-size:0.8rem;">⊘ not in model subset</span>'
+                            verdict = _verdict_badge("#b45309", "⊘ not in model subset")
                     elif is_correct:
-                        verdict = '<span style="background:#0f9d58;color:#fff;border-radius:999px;padding:0.15rem 0.6rem;font-weight:700;font-size:0.8rem;">✓ Correct</span>'
+                        verdict = _verdict_badge("#0f9d58", "✓ Correct")
                     else:
-                        verdict = '<span style="background:#db4437;color:#fff;border-radius:999px;padding:0.15rem 0.6rem;font-weight:700;font-size:0.8rem;">✗ Wrong</span>'
+                        verdict = _verdict_badge("#db4437", "✗ Wrong")
                     st.markdown(
                         f"Ground truth: **{gt}** &nbsp; {verdict}",
                         unsafe_allow_html=True,
@@ -576,14 +481,20 @@ def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
                     top5 = _parse_top5(row.get("pred_top5"))
                     if top5:
                         gt_base = _strip_qualifier(str(row.get("ground_truth", ""))) if pd.notna(row.get("ground_truth")) else None
-                        lines = []
+                        rank1_conf = row.get("pred_confidence", 0) * 100
+                        rank1_match = gt_base and _strip_qualifier(str(row["pred_species"])) == gt_base
+                        rank1_line = f"1. {row['pred_species']} ({rank1_conf:.1f}%)"
+                        if rank1_match:
+                            rank1_line += " ← ground truth"
+
+                        remaining = []
                         for e in top5[1:]:  # skip rank 1, already shown above
                             sp = e.get("species", "?")
                             cf = e.get("confidence", 0.0)
                             match = gt_base and _strip_qualifier(sp) == gt_base
                             highlight = " ← ground truth" if match else ""
-                            lines.append(f"{e['rank']}. {sp} ({cf*100:.1f}%){highlight}")
-                        st.caption("Top 5:\n" + "\n".join(["1. " + row["pred_species"] + f" ({row.get('pred_confidence', 0)*100:.1f}%)" + (" ← ground truth" if gt_base and _strip_qualifier(str(row['pred_species'])) == gt_base else "")] + lines))
+                            remaining.append(f"{e['rank']}. {sp} ({cf*100:.1f}%){highlight}")
+                        st.caption("Top 5:\n" + "\n".join([rank1_line] + remaining))
                     sharpness_100 = row.get("sharpness_score_100")
                     if pd.notna(sharpness_100):
                         sharpness_color = row.get("sharpness_color")
@@ -660,7 +571,6 @@ def _parse_top5(value) -> list | None:
         return None
     if isinstance(value, list):
         return value
-    import ast
     try:
         parsed = ast.literal_eval(str(value))
         return parsed if isinstance(parsed, list) else None
@@ -670,7 +580,6 @@ def _parse_top5(value) -> list | None:
 
 def _strip_qualifier(name: str) -> str:
     """Strip sex/morph qualifier: 'Hooded Merganser (Breeding male)' -> 'Hooded Merganser'."""
-    import re
     return re.sub(r"\s*\([^)]*\)\s*", "", str(name)).strip()
 
 
@@ -788,6 +697,20 @@ def _launch_next_job() -> bool:
     queue = load_queue()
     running = [j for j in queue if j["status"] == "running"]
     pending = [j for j in queue if j["status"] == "pending"]
+
+    # Defense: if a job is stuck as "running" but the subprocess already exited
+    # (e.g. killed by SIGINT before the KeyboardInterrupt handler could update the
+    # queue), mark it failed so the queue doesn't stay permanently blocked.
+    proc = st.session_state.get("_training_proc")
+    if running and proc is not None and proc.poll() is not None:
+        for stuck_job in running:
+            _update_queue_status(stuck_job["id"], status="failed",
+                                 error="Process exited unexpectedly (exit code: "
+                                       f"{proc.poll()})",
+                                 completed_at=datetime.now().isoformat(timespec="seconds"))
+        st.session_state.pop("_training_proc", None)
+        st.session_state.pop("_training_log_f", None)
+        running = []
 
     if running or not pending:
         return False
@@ -939,7 +862,8 @@ def _render_queue_dashboard() -> bool:
                 st.info("Loading dataset...")
             elif status in ("running", "starting"):
                 frac = epoch / max(1, total_epochs)
-                st.progress(frac, text=f"Stage {stage} | Epoch {epoch}/{total_epochs}")
+                label = f"Stage {stage} | Preparing..." if epoch == 0 else f"Stage {stage} | Epoch {epoch}/{total_epochs}"
+                st.progress(frac, text=label)
                 pm1, pm2, pm3 = st.columns(3)
                 if train_acc is not None:
                     pm1.metric("Train acc", f"{train_acc:.4f}")
@@ -1012,12 +936,15 @@ def render_training_tab() -> None:
     # Try to auto-start the next pending job
     launched = _launch_next_job()
     if launched:
-        st.success("Started next queued job.")
+        st.rerun()  # pick up the new "running" status immediately
 
     any_running = _render_queue_dashboard()
 
-    # Auto-refresh while a job is running
-    if any_running:
+    # Auto-refresh while a job is running, or while a subprocess is active but
+    # hasn't updated the queue file to "running" yet (covers the launch gap).
+    proc = st.session_state.get("_training_proc")
+    proc_active = proc is not None and proc.poll() is None
+    if any_running or proc_active:
         time.sleep(3)
         st.rerun()
 
@@ -1102,104 +1029,32 @@ def render_training_tab() -> None:
             st.error(f"Could not load run history: {e}")
 
 
-def main() -> None:
-    st.set_page_config(page_title="Bird Gallery Inference", layout="wide")
-    apply_css()
-    logger = build_app_logger()
-
-    tab_classify, tab_training = st.tabs(["Classify", "Training"])
-
-    with tab_training:
-        render_training_tab()
-
-    # All classify UI lives inside tab_classify
-    with tab_classify:
+def _render_classify_tab(
+    tab,
+    *,
+    run_mode: str,
+    selected_run_dir: "Path | None",
+    label_names_csv: Path,
+    classifier_checkpoint: str,
+    yolo_weights: str,
+    yolo_conf: float,
+    device: str,
+    yolo_batch_size: int,
+    classifier_batch_size: int,
+    input_mode: str,
+    recursive: bool,
+    write_metadata_to_originals: bool,
+    folder_path: str,
+    uploaded_files: list,
+    run_clicked: bool,
+    logger,
+) -> None:
+    """All Classify tab UI. Lives in its own function so `return` statements
+    don't exit main() — allowing the Training tab to always render afterward."""
+    with tab:
         st.title("Bird Detection + Species Identification")
         st.write("Run YOLO bird detection, crop best bird per photo, and classify species with your ResNet checkpoint.")
 
-    run_mode = "New inference"
-    selected_run_dir: Path | None = None
-
-    with st.sidebar:
-        st.header("Run Mode")
-        run_mode = st.radio("Mode", options=["New inference", "View previous run"], index=0)
-
-        if run_mode == "View previous run":
-            previous_runs = list_previous_run_dirs()
-            if not previous_runs:
-                st.warning("No previous runs found in artifacts/pipeline_runs.")
-            else:
-                options = [p.name for p in previous_runs]
-                selected_name = st.selectbox("Previous run", options=options, index=0)
-                selected_run_dir = next((p for p in previous_runs if p.name == selected_name), None)
-
-        st.header("Models")
-        all_specific = st.toggle(
-            "All 555 NABirds species",
-            value=False,
-            help="Off = 98 target species subset  |  On = all 555 NABirds-specific classes",
-        )
-        label_names_csv = ALL_SPECIFIC_LABEL_NAMES_CSV if all_specific else DEFAULT_LABEL_NAMES_CSV
-
-        all_ckpts = list_classifier_checkpoints("artifacts")
-        if not all_ckpts:
-            st.error("No .pt classifier checkpoints found in artifacts/")
-            return
-
-        ckpts = _filter_checkpoints_by_mode(all_ckpts, all_specific)
-        if not ckpts:
-            st.warning("No checkpoints found for the selected species set.")
-            ckpts = all_ckpts
-
-        default_ckpt = choose_best_checkpoint(ckpts)
-        classifier_checkpoint = st.selectbox(
-            "Classifier checkpoint",
-            options=ckpts,
-            index=ckpts.index(default_ckpt),
-        )
-        ckpt_acc = _checkpoint_test_acc(classifier_checkpoint)
-        if ckpt_acc is not None:
-            st.caption(f"Test accuracy: **{ckpt_acc*100:.2f}%** | Label names: {label_names_csv}")
-        else:
-            st.caption(f"Label names: {label_names_csv}")
-        yolo_weights = st.text_input("YOLO weights", value="yolo11n.pt")
-        yolo_conf = st.slider("YOLO confidence threshold", min_value=0.01, max_value=0.95, value=0.25, step=0.01)
-        device = st.selectbox("Device", options=["auto", get_default_device(), "cpu", "cuda", "mps"], index=0)
-        yolo_batch_size = st.slider("YOLO batch size", min_value=1, max_value=16, value=2, step=1)
-        classifier_batch_size = st.slider("Classifier batch size", min_value=1, max_value=128, value=16, step=1)
-
-        st.header("Input")
-        input_mode = st.radio("Input mode", options=["Upload files", "Folder path"], index=0)
-        recursive = st.toggle("Recursive folder scan", value=False)
-        write_metadata_to_originals = st.toggle(
-            "Tag original JPEGs with species/confidence (folder mode)",
-            value=True,
-        )
-
-        folder_path = ""
-        uploaded_files = []
-        if input_mode == "Upload files":
-            uploaded_files = st.file_uploader(
-                "Select JPEG files",
-                type=["jpg", "jpeg"],
-                accept_multiple_files=True,
-            )
-            if write_metadata_to_originals:
-                st.caption("Metadata tagging is only applied for Folder path mode (local files).")
-            if uploaded_files:
-                total_bytes = sum(getattr(f, "size", 0) for f in uploaded_files)
-                total_gb = total_bytes / (1024**3)
-                st.caption(f"Selected files: {len(uploaded_files)} | Total size: {total_gb:.2f} GB")
-                if total_gb > 1.0:
-                    st.warning(
-                        "Large upload selected. For 1000+ photos, folder path mode is more memory-stable than upload mode."
-                    )
-        else:
-            folder_path = st.text_input("Folder path", value="")
-
-        run_clicked = st.button("Run Inference", type="primary", disabled=(run_mode != "New inference"))
-
-    with tab_classify:
         if run_mode == "View previous run":
             if selected_run_dir is None:
                 st.info("Select a saved run to view results.")
@@ -1246,11 +1101,10 @@ def main() -> None:
 
                 st.caption("Frontend log: artifacts/pipeline_runs/frontend.log")
                 st.caption(f"Pipeline log for this run: {selected_run_dir / 'pipeline.log'}")
-                return
             except Exception as e:
                 logger.exception("Failed to load previous run")
                 st.error(f"Could not load previous run: {type(e).__name__}: {e}")
-                return
+            return
 
         if not run_clicked:
             st.info("Select inputs and click Run Inference.")
@@ -1364,6 +1218,129 @@ def main() -> None:
         except Exception as e:
             logger.exception("Pipeline failed")
             st.error(f"Pipeline failed: {type(e).__name__}: {e}")
+
+
+def main() -> None:
+    st.set_page_config(page_title="Bird Gallery Inference", layout="wide")
+    apply_css()
+    logger = build_app_logger()
+
+    tab_classify, tab_training = st.tabs(["Classify", "Training"])
+
+    # ---- Sidebar ----
+    run_mode = "New inference"
+    selected_run_dir: Path | None = None
+
+    with st.sidebar:
+        st.header("Run Mode")
+        run_mode = st.radio("Mode", options=["New inference", "View previous run"], index=0)
+
+        if run_mode == "View previous run":
+            previous_runs = list_previous_run_dirs()
+            if not previous_runs:
+                st.warning("No previous runs found in artifacts/pipeline_runs.")
+            else:
+                options = [p.name for p in previous_runs]
+                selected_name = st.selectbox("Previous run", options=options, index=0)
+                selected_run_dir = next((p for p in previous_runs if p.name == selected_name), None)
+
+        st.header("Models")
+        all_specific = st.toggle(
+            "All 555 NABirds species",
+            value=False,
+            help="Off = 98 target species subset  |  On = all 555 NABirds-specific classes",
+        )
+        label_names_csv = ALL_SPECIFIC_LABEL_NAMES_CSV if all_specific else DEFAULT_LABEL_NAMES_CSV
+
+        all_ckpts = list_classifier_checkpoints("artifacts")
+        if not all_ckpts:
+            st.error("No .pt classifier checkpoints found in artifacts/")
+            # Still render training tab so user can train a model
+            with tab_training:
+                render_training_tab()
+            return
+
+        ckpts = _filter_checkpoints_by_mode(all_ckpts, all_specific)
+        if not ckpts:
+            st.warning("No checkpoints found for the selected species set.")
+            ckpts = all_ckpts
+
+        default_ckpt = choose_best_checkpoint(ckpts)
+        classifier_checkpoint = st.selectbox(
+            "Classifier checkpoint",
+            options=ckpts,
+            index=ckpts.index(default_ckpt),
+        )
+        ckpt_acc = _checkpoint_test_acc(classifier_checkpoint)
+        if ckpt_acc is not None:
+            st.caption(f"Test accuracy: **{ckpt_acc*100:.2f}%** | Label names: {label_names_csv}")
+        else:
+            st.caption(f"Label names: {label_names_csv}")
+        yolo_weights = st.text_input("YOLO weights", value="yolo11n.pt")
+        yolo_conf = st.slider("YOLO confidence threshold", min_value=0.01, max_value=0.95, value=0.25, step=0.01)
+        device = st.selectbox("Device", options=["auto", get_default_device(), "cpu", "cuda", "mps"], index=0)
+        yolo_batch_size = st.slider("YOLO batch size", min_value=1, max_value=16, value=2, step=1)
+        classifier_batch_size = st.slider("Classifier batch size", min_value=1, max_value=128, value=16, step=1)
+
+        st.header("Input")
+        input_mode = st.radio("Input mode", options=["Upload files", "Folder path"], index=0)
+        recursive = st.toggle("Recursive folder scan", value=False)
+        write_metadata_to_originals = st.toggle(
+            "Tag original JPEGs with species/confidence (folder mode)",
+            value=True,
+        )
+
+        folder_path = ""
+        uploaded_files = []
+        if input_mode == "Upload files":
+            uploaded_files = st.file_uploader(
+                "Select JPEG files",
+                type=["jpg", "jpeg"],
+                accept_multiple_files=True,
+            )
+            if write_metadata_to_originals:
+                st.caption("Metadata tagging is only applied for Folder path mode (local files).")
+            if uploaded_files:
+                total_bytes = sum(getattr(f, "size", 0) for f in uploaded_files)
+                total_gb = total_bytes / (1024**3)
+                st.caption(f"Selected files: {len(uploaded_files)} | Total size: {total_gb:.2f} GB")
+                if total_gb > 1.0:
+                    st.warning(
+                        "Large upload selected. For 1000+ photos, folder path mode is more memory-stable than upload mode."
+                    )
+        else:
+            folder_path = st.text_input("Folder path", value="")
+
+        run_clicked = st.button("Run Inference", type="primary", disabled=(run_mode != "New inference"))
+
+    # ---- Classify tab ----
+    # In its own function so `return` statements inside don't exit main(),
+    # ensuring the Training tab always renders below.
+    _render_classify_tab(
+        tab_classify,
+        run_mode=run_mode,
+        selected_run_dir=selected_run_dir,
+        label_names_csv=label_names_csv,
+        classifier_checkpoint=classifier_checkpoint,
+        yolo_weights=yolo_weights,
+        yolo_conf=yolo_conf,
+        device=device,
+        yolo_batch_size=yolo_batch_size,
+        classifier_batch_size=classifier_batch_size,
+        input_mode=input_mode,
+        recursive=recursive,
+        write_metadata_to_originals=write_metadata_to_originals,
+        folder_path=folder_path,
+        uploaded_files=uploaded_files,
+        run_clicked=run_clicked,
+        logger=logger,
+    )
+
+    # ---- Training tab ----
+    # Rendered last so its st.rerun() calls (for live progress) don't prevent
+    # the sidebar or classify tab from rendering in the same script pass.
+    with tab_training:
+        render_training_tab()
 
 
 if __name__ == "__main__":

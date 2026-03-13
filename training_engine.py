@@ -14,6 +14,7 @@ import csv
 import json
 import random
 import re
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -527,6 +528,27 @@ _STAGE_TO_FILENAME = {
     3: "layer3_layer4_finetuned",
 }
 
+_STAGE_UNFREEZE_PREFIXES: dict[int, tuple[str, ...]] = {
+    1: ("fc.",),
+    2: ("layer4.", "fc."),
+    3: ("layer3.", "layer4.", "fc."),
+}
+
+_STAGE_DESCRIPTIONS = {
+    1: "head only",
+    2: "layer4 + fc",
+    3: "layer3 + layer4 + fc",
+}
+
+
+def _stage_hyperparams(config: TrainingConfig, stage_num: int) -> tuple[int, float]:
+    """Return (epochs, lr) for the given stage number."""
+    return {
+        1: (config.stage1_epochs, config.stage1_lr),
+        2: (config.stage2_epochs, config.stage2_lr),
+        3: (config.stage3_epochs, config.stage3_lr),
+    }[stage_num]
+
 
 def _ckpt_name(config: TrainingConfig, stage_num: int, run_id: str) -> str:
     suffix = "_all_specific" if config.species_mode == "555" else ""
@@ -601,143 +623,53 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
         progress_base = {"job_id": job_id, "status": "running"}
         stages_to_run = sorted(config.stages_to_run)
         stage_model: nn.Module | None = None
-        stage_ckpt_paths: dict[int, Path] = {}
 
-        # ---- Stage 1 ----
-        if 1 in stages_to_run:
-            print("--- Stage 1: head only ---")
+        for stage_num in stages_to_run:
+            epochs, lr = _stage_hyperparams(config, stage_num)
+            prefixes = _STAGE_UNFREEZE_PREFIXES[stage_num]
+            print(f"--- Stage {stage_num}: {_STAGE_DESCRIPTIONS[stage_num]} ---")
+
             stage_t0 = time.perf_counter()
-            model = _build_model(num_classes).to(device)
-            for name, param in model.named_parameters():
-                param.requires_grad = name.startswith("fc.")
-            criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
-            optimizer = torch.optim.Adam(
-                filter(lambda p: p.requires_grad, model.parameters()),
-                lr=config.stage1_lr, weight_decay=config.weight_decay,
-            )
 
-            model, best_val_s1, cancelled = _train_stage(
-                model, optimizer, criterion, train_loader, val_loader,
-                config.stage1_epochs, device, job_id, 1, progress_base,
-            )
-
-            ckpt_path = ARTIFACTS_DIR / _ckpt_name(config, 1, run_id)
-            torch.save(model.state_dict(), ckpt_path)
-            stage_ckpt_paths[1] = ckpt_path
-            print(f"Stage 1 saved: {ckpt_path.name} | best_val_acc={best_val_s1:.4f}")
-
-            test_res = _evaluate_test(model, test_df, eval_transform, device, config.batch_size)
-            print(f"Stage 1 test_acc={test_res['test_acc']:.4f}")
-            _append_run_summary({
-                "run_group_id": config.run_group_id, "run_label": config.run_label,
-                "run_started_at": run_started_at, "stage": "stage1", "seed": config.seed,
-                "split_file": split_file.name, "batch_size": config.batch_size,
-                "num_epochs": config.stage1_epochs, "lr": config.stage1_lr,
-                "weight_decay": config.weight_decay, "label_smoothing": config.label_smoothing,
-                "best_val_acc": best_val_s1, "test_loss": test_res["test_loss"],
-                "test_acc": test_res["test_acc"], "test_time_s": test_res["test_time_s"],
-                "run_time_s": time.perf_counter() - stage_t0,
-                "checkpoint_path": str(ckpt_path), "config_json": config_json,
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-            })
-
-            stage_model = model
-            if cancelled:
-                _update_queue_status(job_id, status="cancelled",
-                                     completed_at=datetime.now().isoformat(timespec="seconds"))
-                _write_progress(job_id, {"job_id": job_id, "status": "cancelled",
-                                         "stage": 1, "epoch": 0, "total_epochs": 0,
-                                         "updated_at": datetime.now().isoformat(timespec="seconds")})
-                return
-
-        # ---- Stage 2 ----
-        if 2 in stages_to_run:
-            print("--- Stage 2: layer4 + fc ---")
-            if stage_model is None:
-                if 1 not in stage_ckpt_paths:
-                    raise RuntimeError("Stage 2 requires stage 1 checkpoint.")
+            if stage_num == 1:
                 stage_model = _build_model(num_classes).to(device)
-                stage_model.load_state_dict(torch.load(stage_ckpt_paths[1], map_location="cpu"))
-
-            stage_t0 = time.perf_counter()
-            for name, param in stage_model.named_parameters():
-                param.requires_grad = name.startswith("layer4.") or name.startswith("fc.")
-            criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
-            optimizer = torch.optim.Adam(
-                filter(lambda p: p.requires_grad, stage_model.parameters()),
-                lr=config.stage2_lr, weight_decay=config.weight_decay,
-            )
-
-            stage_model, best_val_s2, cancelled = _train_stage(
-                stage_model, optimizer, criterion, train_loader, val_loader,
-                config.stage2_epochs, device, job_id, 2, progress_base,
-            )
-
-            ckpt_path = ARTIFACTS_DIR / _ckpt_name(config, 2, run_id)
-            torch.save(stage_model.state_dict(), ckpt_path)
-            stage_ckpt_paths[2] = ckpt_path
-            print(f"Stage 2 saved: {ckpt_path.name} | best_val_acc={best_val_s2:.4f}")
-
-            test_res = _evaluate_test(stage_model, test_df, eval_transform, device, config.batch_size)
-            print(f"Stage 2 test_acc={test_res['test_acc']:.4f}")
-            _append_run_summary({
-                "run_group_id": config.run_group_id, "run_label": config.run_label,
-                "run_started_at": run_started_at, "stage": "stage2", "seed": config.seed,
-                "split_file": split_file.name, "batch_size": config.batch_size,
-                "num_epochs": config.stage2_epochs, "lr": config.stage2_lr,
-                "weight_decay": config.weight_decay, "label_smoothing": config.label_smoothing,
-                "best_val_acc": best_val_s2, "test_loss": test_res["test_loss"],
-                "test_acc": test_res["test_acc"], "test_time_s": test_res["test_time_s"],
-                "run_time_s": time.perf_counter() - stage_t0,
-                "checkpoint_path": str(ckpt_path), "config_json": config_json,
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-            })
-
-            if cancelled:
-                _update_queue_status(job_id, status="cancelled",
-                                     completed_at=datetime.now().isoformat(timespec="seconds"))
-                _write_progress(job_id, {"job_id": job_id, "status": "cancelled",
-                                         "stage": 2, "epoch": 0, "total_epochs": 0,
-                                         "updated_at": datetime.now().isoformat(timespec="seconds")})
-                return
-
-        # ---- Stage 3 ----
-        if 3 in stages_to_run:
-            print("--- Stage 3: layer3 + layer4 + fc ---")
-            if stage_model is None:
-                raise RuntimeError("Stage 3 requires stage 2 to have run.")
-
-            stage_t0 = time.perf_counter()
-            for name, param in stage_model.named_parameters():
-                param.requires_grad = (
-                    name.startswith("layer3.") or
-                    name.startswith("layer4.") or
-                    name.startswith("fc.")
+            elif stage_model is None:
+                raise RuntimeError(
+                    f"Stage {stage_num} requires preceding stages to have run."
                 )
+
+            for name, param in stage_model.named_parameters():
+                param.requires_grad = any(name.startswith(p) for p in prefixes)
+
             criterion = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
             optimizer = torch.optim.Adam(
                 filter(lambda p: p.requires_grad, stage_model.parameters()),
-                lr=config.stage3_lr, weight_decay=config.weight_decay,
+                lr=lr, weight_decay=config.weight_decay,
             )
+            _write_progress(job_id, {
+                **progress_base, "stage": stage_num, "epoch": 0,
+                "total_epochs": epochs,
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+            })
 
-            stage_model, best_val_s3, cancelled = _train_stage(
+            stage_model, best_val, cancelled = _train_stage(
                 stage_model, optimizer, criterion, train_loader, val_loader,
-                config.stage3_epochs, device, job_id, 3, progress_base,
+                epochs, device, job_id, stage_num, progress_base,
             )
 
-            ckpt_path = ARTIFACTS_DIR / _ckpt_name(config, 3, run_id)
+            ckpt_path = ARTIFACTS_DIR / _ckpt_name(config, stage_num, run_id)
             torch.save(stage_model.state_dict(), ckpt_path)
-            print(f"Stage 3 saved: {ckpt_path.name} | best_val_acc={best_val_s3:.4f}")
+            print(f"Stage {stage_num} saved: {ckpt_path.name} | best_val_acc={best_val:.4f}")
 
             test_res = _evaluate_test(stage_model, test_df, eval_transform, device, config.batch_size)
-            print(f"Stage 3 test_acc={test_res['test_acc']:.4f}")
+            print(f"Stage {stage_num} test_acc={test_res['test_acc']:.4f}")
             _append_run_summary({
                 "run_group_id": config.run_group_id, "run_label": config.run_label,
-                "run_started_at": run_started_at, "stage": "stage3", "seed": config.seed,
-                "split_file": split_file.name, "batch_size": config.batch_size,
-                "num_epochs": config.stage3_epochs, "lr": config.stage3_lr,
+                "run_started_at": run_started_at, "stage": f"stage{stage_num}",
+                "seed": config.seed, "split_file": split_file.name,
+                "batch_size": config.batch_size, "num_epochs": epochs, "lr": lr,
                 "weight_decay": config.weight_decay, "label_smoothing": config.label_smoothing,
-                "best_val_acc": best_val_s3, "test_loss": test_res["test_loss"],
+                "best_val_acc": best_val, "test_loss": test_res["test_loss"],
                 "test_acc": test_res["test_acc"], "test_time_s": test_res["test_time_s"],
                 "run_time_s": time.perf_counter() - stage_t0,
                 "checkpoint_path": str(ckpt_path), "config_json": config_json,
@@ -747,9 +679,11 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
             if cancelled:
                 _update_queue_status(job_id, status="cancelled",
                                      completed_at=datetime.now().isoformat(timespec="seconds"))
-                _write_progress(job_id, {"job_id": job_id, "status": "cancelled",
-                                         "stage": 3, "epoch": 0, "total_epochs": 0,
-                                         "updated_at": datetime.now().isoformat(timespec="seconds")})
+                _write_progress(job_id, {
+                    "job_id": job_id, "status": "cancelled",
+                    "stage": stage_num, "epoch": 0, "total_epochs": 0,
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                })
                 return
 
         # All stages complete
@@ -762,6 +696,18 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
         })
         print(f"Job {job_id} complete.")
 
+    except KeyboardInterrupt:
+        # Process was killed (SIGINT / Streamlit Stop button). KeyboardInterrupt
+        # is a BaseException, not Exception, so it would bypass the handler below
+        # and leave the job stuck as "running" in the queue forever.
+        _update_queue_status(job_id, status="cancelled",
+                             completed_at=datetime.now().isoformat(timespec="seconds"))
+        _write_progress(job_id, {
+            "job_id": job_id, "status": "cancelled",
+            "stage": 0, "epoch": 0, "total_epochs": 0,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        raise
     except Exception as e:
         import traceback
         err = traceback.format_exc()
@@ -789,7 +735,7 @@ if __name__ == "__main__":
     job = next((j for j in queue if j["id"] == args.job_id), None)
     if job is None:
         print(f"ERROR: Job {args.job_id} not found in {QUEUE_JSON}")
-        exit(1)
+        sys.exit(1)
 
     cfg = TrainingConfig(**job["config"])
     train_model(cfg, args.job_id)
