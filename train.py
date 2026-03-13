@@ -39,7 +39,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 1200  # 20 minutes
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "stage2 lr=1e-4 on 6-epoch cap"
+NOTES = "cap stage2 at 6 to reach stage3"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -63,7 +63,7 @@ STAGES = [
         "name": "layer4+head",
         "unfreeze": ("layer4.", "fc."),
         "lr": 1e-4,
-        "max_epochs": 10,
+        "max_epochs": 6,
     },
     {
         "name": "layer3+layer4+head",
