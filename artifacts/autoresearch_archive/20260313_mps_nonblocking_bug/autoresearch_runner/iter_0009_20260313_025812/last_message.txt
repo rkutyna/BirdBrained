@@ -1,0 +1,5 @@
+Experiment: disabled label smoothing in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) (`LABEL_SMOOTHING 0.05 -> 0.0`) while keeping the batch-96 baseline unchanged, then ran `python train.py` to completion on MPS.
+
+Result: the new logged run `20260313_030100_5acb2b` recorded `top1_val_acc=0.979417` and `top1_test_acc=0.978738`, which improves on the pre-cycle best `0.977702`.
+
+Decision: kept the `train.py` changes.

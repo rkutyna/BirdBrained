@@ -1,0 +1,3 @@
+Experiment: switched the optimizer from `adam` to `adamw` in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) while keeping the batch size, stage schedule, and other settings fixed. `python train.py` ran on MPS, timed out in stage 1 after 9 completed epochs, and logged `top1_val_acc=0.967410` in `artifacts/autoresearch_log.csv`.
+
+Result: `0.967410` tied the pre-cycle best `0.967410` but did not exceed it, so the change was not kept. [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) was restored to its pre-cycle contents.

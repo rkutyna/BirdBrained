@@ -1,0 +1,14 @@
+[
+  {
+    "notes": "stage2 lr=1e-4 on 6-epoch cap",
+    "peak_memory_mb": "370.8",
+    "run_id": "20260313_145006_b8a87e",
+    "status": "keep",
+    "time_budget_sec": "1200",
+    "timestamp": "2026-03-13T15:10:35",
+    "top1_test_acc": "0.911866",
+    "top1_val_acc": "0.927959",
+    "total_epochs": "13",
+    "training_seconds": "1200.3"
+  }
+]

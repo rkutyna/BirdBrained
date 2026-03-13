@@ -8,7 +8,7 @@ never modified.
 
 Usage:
     python prepare.py          # once, to build the cached splits
-    python train.py            # run one experiment (default 10-min budget)
+    python train.py            # run one experiment (default 30-min budget)
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from torchvision import models, transforms
 # ===================================================================
 
 # Wall-clock time budget for the entire run (training only, excludes eval)
-TIME_BUDGET_SEC = 1200  # 20 minutes
+TIME_BUDGET_SEC = 1800  # 30 minutes
 
 # Notes: the agent fills this in to describe what changed this run
 NOTES = "cap stage2 at 6 to reach stage3"

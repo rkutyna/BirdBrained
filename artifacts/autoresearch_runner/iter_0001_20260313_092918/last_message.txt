@@ -1,0 +1,5 @@
+Experiment: updated [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to raise `stage1` LR from `1e-3` to `1e-2` and set `NOTES` to `stage1 lr=1e-2 from 1e-3`, then ran exactly one `python train.py` run on MPS.
+
+Result: the run hit the 1200s budget after 9 completed epochs and logged `top1_val_acc=0.678388`, `top1_test_acc=0.66358` in [artifacts/autoresearch_log.csv](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log.csv).
+
+Decision: kept the change in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py), because `0.678388 > 0.000000`.

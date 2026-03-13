@@ -1,0 +1,10 @@
+[
+  {
+    "notes": "batch size 96, label smoothing 0.0, dropout 0.2",
+    "run_id": "20260313_040905_a11f5b",
+    "time_budget_sec": "1200",
+    "timestamp": "2026-03-13T04:29:38",
+    "top1_test_acc": "0.978738",
+    "top1_val_acc": "0.977702"
+  }
+]

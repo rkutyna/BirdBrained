@@ -1,0 +1,14 @@
+[
+  {
+    "notes": "cap stage1 at 7 epochs",
+    "peak_memory_mb": "370.8",
+    "run_id": "20260313_152517_ced8c8",
+    "status": "discard",
+    "time_budget_sec": "1200",
+    "timestamp": "2026-03-13T15:45:52",
+    "top1_test_acc": "0.911523",
+    "top1_val_acc": "0.925386",
+    "total_epochs": "13",
+    "training_seconds": "1200.6"
+  }
+]

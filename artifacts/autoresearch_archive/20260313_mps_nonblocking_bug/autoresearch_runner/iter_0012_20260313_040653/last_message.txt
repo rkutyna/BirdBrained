@@ -1,0 +1,5 @@
+Experiment this cycle: lowered classifier dropout from `0.4` to `0.2` in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) on the current best baseline (`batch size 96`, `label smoothing 0.0`), then ran exactly one `python train.py` run on Apple MPS.
+
+Result: run `20260313_040905_a11f5b` logged `top1_val_acc=0.977702` in `artifacts/autoresearch_log.csv`, which does not beat the pre-cycle best `0.979417`.
+
+Decision: reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents.

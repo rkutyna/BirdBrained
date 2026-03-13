@@ -1,0 +1,10 @@
+[
+  {
+    "notes": "batch size 96, per-stage cosine lr decay",
+    "run_id": "20260313_021123_ad498a",
+    "time_budget_sec": "1200",
+    "timestamp": "2026-03-13T02:31:57",
+    "top1_test_acc": "0.978738",
+    "top1_val_acc": "0.977702"
+  }
+]

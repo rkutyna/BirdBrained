@@ -1,0 +1,10 @@
+[
+  {
+    "notes": "batch size 96, cap head-only stage at 2 epochs to reach layer4 sooner",
+    "run_id": "20260313_023700_839b41",
+    "time_budget_sec": "1200",
+    "timestamp": "2026-03-13T02:57:34",
+    "top1_test_acc": "0.973937",
+    "top1_val_acc": "0.977702"
+  }
+]

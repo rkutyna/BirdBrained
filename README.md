@@ -217,6 +217,39 @@ To retroactively evaluate checkpoints not yet in `run_summary.csv`:
 python eval_missing_checkpoints.py
 ```
 
+## Overnight Autoresearch
+
+`autorun.py` is an outer loop for unattended Codex-driven experimentation. It
+launches a fresh `codex exec` session each iteration, asks it to do exactly one
+`train.py` experiment, then keeps or restores `train.py` based on the newest
+row in `artifacts/autoresearch_log.csv`.
+
+Basic usage:
+
+```bash
+python autorun.py --iterations 20 --danger-full-access
+```
+
+Time-based stop condition:
+
+```bash
+python autorun.py --hours 8 --danger-full-access
+```
+
+Useful flags:
+
+- `--patience 8` stops after 8 consecutive non-improving iterations.
+- `--cooldown-seconds 5` waits between Codex sessions.
+- `--extra-instructions path/to/file.txt` appends custom guidance to every
+  Codex prompt.
+- `--dry-run` builds the iteration prompt and state directory without invoking
+  Codex.
+
+Runner artifacts are written to `artifacts/autoresearch_runner/`.
+
+Note: in this repo, PyTorch only sees Apple MPS when Codex runs unsandboxed, so
+`--danger-full-access` is the practical mode for overnight training on macOS.
+
 ## Metadata for Lightroom
 
 When metadata tagging is enabled (folder mode + `exiftool` available), the pipeline writes to each original JPEG:

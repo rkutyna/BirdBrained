@@ -1,0 +1,10 @@
+[
+  {
+    "notes": "batch size 96, label smoothing 0.0, adamw optimizer",
+    "run_id": "20260313_034540_d6efde",
+    "time_budget_sec": "1200",
+    "timestamp": "2026-03-13T04:06:14",
+    "top1_test_acc": "0.978738",
+    "top1_val_acc": "0.977702"
+  }
+]

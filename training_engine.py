@@ -13,7 +13,6 @@ import argparse
 import csv
 import json
 import random
-import re
 import sys
 import time
 import uuid
@@ -30,16 +29,25 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import models, transforms
 
+from nabirds_common import (
+    TARGET_SIZE,
+    IMAGENET_MEAN,
+    IMAGENET_STD,
+    IMAGENET_PAD_RGB,
+    DATA_ROOT,
+    IMAGES_DIR,
+    ARTIFACTS_DIR,
+    DEFAULT_LABEL_NAMES_CSV,
+    ALL_SPECIFIC_LABEL_NAMES_CSV,
+    canonicalize_name as _canonicalize_name,
+    crop_resize_pad_bbox as _crop_resize_pad_bbox,
+)
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-DATA_ROOT = Path("NABirds Dataset/nabirds")
-IMAGES_DIR = DATA_ROOT / "images"
-ARTIFACTS_DIR = Path("artifacts")
 LOGS_DIR = Path("artifacts/logs")
 
-DEFAULT_LABEL_NAMES_CSV = ARTIFACTS_DIR / "label_names.csv"
-ALL_SPECIFIC_LABEL_NAMES_CSV = ARTIFACTS_DIR / "label_names_nabirds_all_specific.csv"
 SPLIT_80_20_TARGET = DATA_ROOT / "train_test_split_8020_target_species.txt"
 SPLIT_80_20_ALL = DATA_ROOT / "train_test_split_8020_all_specific.txt"
 
@@ -52,11 +60,6 @@ SUMMARY_COLUMNS = [
     "label_smoothing", "best_val_acc", "test_loss", "test_acc",
     "test_time_s", "run_time_s", "checkpoint_path", "config_json", "timestamp",
 ]
-
-TARGET_SIZE = 240
-IMAGENET_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_STD = (0.229, 0.224, 0.225)
-IMAGENET_PAD_RGB = tuple(int(round(c * 255)) for c in IMAGENET_MEAN)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +219,7 @@ def _check_cancel(job_id: str) -> bool:
     return False
 
 
-def _update_queue_status(job_id: str, **kwargs) -> None:
+def update_queue_status(job_id: str, **kwargs) -> None:
     queue = load_queue()
     for job in queue:
         if job["id"] == job_id:
@@ -226,43 +229,8 @@ def _update_queue_status(job_id: str, **kwargs) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Data helpers
+# Data helpers (canonicalize_name and crop_resize_pad_bbox imported from nabirds_common)
 # ---------------------------------------------------------------------------
-def _canonicalize_name(name: str) -> str:
-    name = re.sub(r"\s*\([^)]*\)\s*", " ", name)
-    name = name.lower().replace("grey", "gray").replace("orioles", "oriole")
-    name = name.replace("-", " ").replace("'", "")
-    name = re.sub(r"[^a-z0-9 ]+", " ", name)
-    return re.sub(r"\s+", " ", name).strip()
-
-
-def _crop_resize_pad_bbox(
-    img: Image.Image,
-    bbox: tuple,
-    size: int = 240,
-    pad_rgb: tuple = (124, 116, 104),
-) -> Image.Image:
-    x, y, w, h = bbox
-    x1 = max(0, int(np.floor(x)))
-    y1 = max(0, int(np.floor(y)))
-    x2 = min(img.width, int(np.ceil(x + w)))
-    y2 = min(img.height, int(np.ceil(y + h)))
-    cropped = img.crop((x1, y1, x2, y2)) if x2 > x1 and y2 > y1 else img
-    scale = min(size / cropped.width, size / cropped.height)
-    new_w = max(1, int(round(cropped.width * scale)))
-    new_h = max(1, int(round(cropped.height * scale)))
-    resized = cropped.resize((new_w, new_h), resample=Image.BILINEAR)
-    pad_left = (size - new_w) // 2
-    pad_top = (size - new_h) // 2
-    pad_right = size - new_w - pad_left
-    pad_bottom = size - new_h - pad_top
-    return ImageOps.expand(
-        resized,
-        border=(pad_left, pad_top, pad_right, pad_bottom),
-        fill=pad_rgb,
-    )
-
-
 class _NABirdsDataset(torch.utils.data.Dataset):
     def __init__(self, df: pd.DataFrame, transform):
         self.df = df.reset_index(drop=True)
@@ -390,6 +358,15 @@ def _set_seeds(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _non_blocking_transfer(device: torch.device) -> bool:
+    """Use non-blocking transfers only on CUDA.
+
+    On this setup, `non_blocking=True` on MPS can corrupt labels and produce
+    misleadingly high accuracy with unusable checkpoints.
+    """
+    return device.type == "cuda"
+
+
 # ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
@@ -400,6 +377,7 @@ def _run_epoch(
     device: torch.device,
     optimizer=None,
     progress_fn: Any = None,
+    scaler=None,
 ) -> tuple[float, float, float]:
     is_train = optimizer is not None
     model.train(is_train)
@@ -409,22 +387,27 @@ def _run_epoch(
     t0 = time.perf_counter()
     total_batches = len(loader)
     report_every = max(1, total_batches // 20)  # ~20 updates per epoch
+    can_non_block = _non_blocking_transfer(device)
+    use_amp = device.type in ("cuda", "mps")
+    amp_dtype = torch.bfloat16 if device.type == "cuda" else torch.float16
 
     with torch.set_grad_enabled(is_train):
         for batch_idx, (images, targets) in enumerate(loader, 1):
-            images = images.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
+            images = images.to(device, non_blocking=can_non_block)
+            targets = targets.to(device, non_blocking=can_non_block)
             if is_train:
                 optimizer.zero_grad(set_to_none=True)
-            logits = model(images)
-            loss = criterion(logits, targets)
+            with torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
+                logits = model(images)
+                loss = criterion(logits, targets)
             if is_train:
-                loss.backward()
-                optimizer.step()
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            elif device.type == "mps" and hasattr(torch.mps, "synchronize"):
-                torch.mps.synchronize()
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
             preds = logits.argmax(dim=1)
             running_loss += loss.item() * targets.size(0)
             running_correct += int(preds.eq(targets).sum())
@@ -484,6 +467,7 @@ def _train_stage(
     job_id: str,
     stage_num: int,
     progress_base: dict,
+    scaler=None,
 ) -> tuple[nn.Module, float, bool]:
     """Train one stage. Returns (model_with_best_weights, best_val_acc, was_cancelled)."""
     best_val_acc = -1.0
@@ -511,6 +495,7 @@ def _train_stage(
         train_loss, train_acc, _ = _run_epoch(
             model, train_loader, criterion, device, optimizer,
             progress_fn=lambda **kw: _batch_progress("train", **kw),
+            scaler=scaler,
         )
         val_loss, val_acc, _ = _run_epoch(
             model, val_loader, criterion, device,
@@ -606,7 +591,7 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
     if not config.run_group_id:
         config.run_group_id = job_id
 
-    _update_queue_status(job_id, status="running", started_at=run_started_at)
+    update_queue_status(job_id, status="running", started_at=run_started_at)
     _write_progress(job_id, {
         "job_id": job_id, "status": "starting",
         "stage": 0, "epoch": 0, "total_epochs": 0,
@@ -637,15 +622,17 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
 
         train_transform, eval_transform = _build_transforms(config)
         pin = device.type not in ("mps", "cpu")
+        pw = config.num_workers > 0
+        scaler = torch.amp.GradScaler("cuda") if device.type == "cuda" else None
         train_loader = DataLoader(
             _NABirdsDataset(train_df, train_transform),
             batch_size=config.batch_size, shuffle=True,
-            num_workers=config.num_workers, pin_memory=pin,
+            num_workers=config.num_workers, pin_memory=pin, persistent_workers=pw,
         )
         val_loader = DataLoader(
             _NABirdsDataset(val_df, eval_transform),
             batch_size=config.batch_size, shuffle=False,
-            num_workers=config.num_workers, pin_memory=pin,
+            num_workers=config.num_workers, pin_memory=pin, persistent_workers=pw,
         )
 
         config_json = json.dumps({
@@ -690,7 +677,7 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
 
             stage_model, best_val, cancelled = _train_stage(
                 stage_model, optimizer, criterion, train_loader, val_loader,
-                epochs, device, job_id, stage_num, progress_base,
+                epochs, device, job_id, stage_num, progress_base, scaler=scaler,
             )
 
             ckpt_path = ARTIFACTS_DIR / _ckpt_name(config, stage_num, run_id)
@@ -713,7 +700,7 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
             })
 
             if cancelled:
-                _update_queue_status(job_id, status="cancelled",
+                update_queue_status(job_id, status="cancelled",
                                      completed_at=datetime.now().isoformat(timespec="seconds"))
                 _write_progress(job_id, {
                     "job_id": job_id, "status": "cancelled",
@@ -723,7 +710,7 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
                 return
 
         # All stages complete
-        _update_queue_status(job_id, status="done",
+        update_queue_status(job_id, status="done",
                              completed_at=datetime.now().isoformat(timespec="seconds"))
         _write_progress(job_id, {
             "job_id": job_id, "status": "done",
@@ -736,7 +723,7 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
         # Process was killed (SIGINT / Streamlit Stop button). KeyboardInterrupt
         # is a BaseException, not Exception, so it would bypass the handler below
         # and leave the job stuck as "running" in the queue forever.
-        _update_queue_status(job_id, status="cancelled",
+        update_queue_status(job_id, status="cancelled",
                              completed_at=datetime.now().isoformat(timespec="seconds"))
         _write_progress(job_id, {
             "job_id": job_id, "status": "cancelled",
@@ -748,7 +735,7 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
         import traceback
         err = traceback.format_exc()
         print(err)
-        _update_queue_status(job_id, status="failed", error=str(e),
+        update_queue_status(job_id, status="failed", error=str(e),
                              completed_at=datetime.now().isoformat(timespec="seconds"))
         _write_progress(job_id, {
             "job_id": job_id, "status": "failed",

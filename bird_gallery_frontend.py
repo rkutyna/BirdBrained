@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import pickle
 import re
 import subprocess
 import sys
@@ -23,15 +24,17 @@ from bird_pipeline import (
     get_default_device,
     input_items_from_uploaded_files,
     input_items_from_folder,
+    load_classifier,
     list_classifier_checkpoints,
     run_inference_batch,
+    classify_crops_batch,
 )
 from training_engine import (
     LOGS_DIR,
     QUEUE_JSON,
     SUMMARY_CSV,
     TrainingConfig,
-    _update_queue_status,
+    update_queue_status,
     add_to_queue,
     cancel_running_job,
     clear_finished_jobs,
@@ -47,6 +50,9 @@ COLOR_MAP = {
     "yellow": "#f4b400",
     "red": "#db4437",
 }
+
+AUTORESEARCH_LOG_CSV = Path("artifacts/autoresearch_log.csv")
+AUTORESEARCH_BEST_CKPT = Path("artifacts/autoresearch_best.pt")
 
 
 def confidence_badge(conf: float | None, color_name: str | None) -> str:
@@ -194,11 +200,98 @@ def _checkpoint_stage_rank(ckpt_path: str) -> int:
     return 1
 
 
-def _checkpoint_test_acc(
+def _load_autoresearch_log(
+    autoresearch_log_csv: Path = AUTORESEARCH_LOG_CSV,
+) -> pd.DataFrame | None:
+    if not autoresearch_log_csv.exists():
+        return None
+    try:
+        df = pd.read_csv(autoresearch_log_csv)
+        if "top1_val_acc" not in df.columns:
+            return None
+        df["top1_val_acc"] = pd.to_numeric(df["top1_val_acc"], errors="coerce")
+        if "top1_test_acc" in df.columns:
+            df["top1_test_acc"] = pd.to_numeric(df["top1_test_acc"], errors="coerce")
+        return df.dropna(subset=["top1_val_acc"])
+    except Exception:
+        return None
+
+
+def _autoresearch_best_metrics(
+    checkpoint_path: str,
+    autoresearch_log_csv: Path = AUTORESEARCH_LOG_CSV,
+) -> dict[str, float | str] | None:
+    if Path(checkpoint_path).name != AUTORESEARCH_BEST_CKPT.name:
+        return None
+    df = _load_autoresearch_log(autoresearch_log_csv)
+    if df is None or df.empty:
+        return None
+    best_idx = df["top1_val_acc"].idxmax()
+    best_row = df.loc[best_idx]
+    test_acc = best_row.get("top1_test_acc")
+    return {
+        "source": "autoresearch_log",
+        "val_acc": float(best_row["top1_val_acc"]),
+        "test_acc": float(test_acc) if pd.notna(test_acc) else None,
+    }
+
+
+@st.cache_data(show_spinner=False)
+def _autoresearch_checkpoint_sanity(
+    checkpoint_path: str,
+    label_names_csv: str,
+    sample_size: int = 32,
+) -> dict[str, float | str | bool] | None:
+    if Path(checkpoint_path).name != AUTORESEARCH_BEST_CKPT.name:
+        return None
+
+    cache_path = Path("artifacts/autoresearch_splits.pkl")
+    if not cache_path.exists():
+        return None
+
+    try:
+        with cache_path.open("rb") as f:
+            data = pickle.load(f)
+        test_df = data.get("test_df")
+        if test_df is None or len(test_df) == 0:
+            return None
+
+        sample_df = test_df.head(min(sample_size, len(test_df))).copy()
+        device = get_default_device()
+        model, label_names = load_classifier(checkpoint_path, label_names_csv, device)
+
+        crops = []
+        for _, row in sample_df.iterrows():
+            img = Image.open(row["image_path"]).convert("RGB")
+            x, y, w, h = row["x"], row["y"], row["w"], row["h"]
+            crops.append(img.crop((int(x), int(y), int(x + w), int(y + h))))
+
+        preds = classify_crops_batch(crops, model, label_names, device)
+        pred_species = pd.Series([p["species"] for p in preds], dtype="string")
+        target_species = sample_df["target"].map(lambda idx: label_names[int(idx)]).astype("string")
+        acc = float((pred_species == target_species).mean())
+        dominant_species = str(pred_species.mode().iloc[0])
+        dominant_frac = float((pred_species == dominant_species).mean())
+        sane = acc >= 0.25 and dominant_frac <= 0.8
+        return {
+            "sane": sane,
+            "sample_acc": acc,
+            "dominant_species": dominant_species,
+            "dominant_frac": dominant_frac,
+        }
+    except Exception:
+        return None
+
+
+def _checkpoint_metrics(
     checkpoint_path: str,
     run_summary_csv: Path = Path("artifacts/logs/run_summary.csv"),
-) -> float | None:
-    """Return the best test_acc recorded for this checkpoint in run_summary.csv, or None."""
+) -> dict[str, float | str] | None:
+    """Return recorded metrics for a checkpoint from autoresearch_log or run_summary."""
+    auto_metrics = _autoresearch_best_metrics(checkpoint_path)
+    if auto_metrics is not None:
+        return auto_metrics
+
     if not run_summary_csv.exists():
         return None
     try:
@@ -210,7 +303,13 @@ def _checkpoint_test_acc(
             lambda p: bool(_path_keys(str(p)) & keys) if pd.notna(p) else False
         )
         matched = pd.to_numeric(df.loc[mask, "test_acc"], errors="coerce").dropna()
-        return float(matched.max()) if not matched.empty else None
+        if matched.empty:
+            return None
+        return {
+            "source": "run_summary",
+            "val_acc": None,
+            "test_acc": float(matched.max()),
+        }
     except Exception:
         return None
 
@@ -230,6 +329,17 @@ def choose_best_checkpoint(
     ckpts = list(checkpoints)
     if not ckpts:
         raise ValueError("No checkpoints provided.")
+
+    autoresearch_best = next(
+        (ckpt for ckpt in ckpts if Path(ckpt).name == AUTORESEARCH_BEST_CKPT.name),
+        None,
+    )
+    if (
+        autoresearch_best is not None
+        and _autoresearch_best_metrics(autoresearch_best) is not None
+        and (_autoresearch_checkpoint_sanity(autoresearch_best, DEFAULT_LABEL_NAMES_CSV) or {}).get("sane", False)
+    ):
+        return autoresearch_best
 
     checkpoint_by_key: dict[str, str] = {}
     for ckpt in ckpts:
@@ -704,7 +814,7 @@ def _launch_next_job() -> bool:
     proc = st.session_state.get("_training_proc")
     if running and proc is not None and proc.poll() is not None:
         for stuck_job in running:
-            _update_queue_status(stuck_job["id"], status="failed",
+            update_queue_status(stuck_job["id"], status="failed",
                                  error="Process exited unexpectedly (exit code: "
                                        f"{proc.poll()})",
                                  completed_at=datetime.now().isoformat(timespec="seconds"))
@@ -1295,11 +1405,32 @@ def main() -> None:
             options=ckpts,
             index=ckpts.index(default_ckpt),
         )
-        ckpt_acc = _checkpoint_test_acc(classifier_checkpoint)
-        if ckpt_acc is not None:
-            st.caption(f"Test accuracy: **{ckpt_acc*100:.2f}%** | Label names: {label_names_csv}")
+        ckpt_metrics = _checkpoint_metrics(classifier_checkpoint)
+        sanity = _autoresearch_checkpoint_sanity(classifier_checkpoint, str(label_names_csv))
+        if ckpt_metrics is not None:
+            metric_parts = []
+            val_acc = ckpt_metrics.get("val_acc")
+            test_acc = ckpt_metrics.get("test_acc")
+            source = ckpt_metrics.get("source")
+            if val_acc is not None:
+                metric_parts.append(f"Val accuracy: **{float(val_acc)*100:.2f}%**")
+            if test_acc is not None:
+                metric_parts.append(f"Test accuracy: **{float(test_acc)*100:.2f}%**")
+            if source == "autoresearch_log":
+                metric_parts.append("Source: `artifacts/autoresearch_log.csv`")
+            elif source == "run_summary":
+                metric_parts.append("Source: `artifacts/logs/run_summary.csv`")
+            metric_parts.append(f"Label names: {label_names_csv}")
+            st.caption(" | ".join(metric_parts))
         else:
             st.caption(f"Label names: {label_names_csv}")
+        if sanity is not None and not bool(sanity.get("sane")):
+            st.warning(
+                "This autoresearch checkpoint failed a held-out sanity check and may be corrupted. "
+                f"Sample acc={float(sanity['sample_acc'])*100:.1f}% | "
+                f"dominant prediction={sanity['dominant_species']} ({float(sanity['dominant_frac'])*100:.1f}%). "
+                "Select a different checkpoint and retrain autoresearch after the MPS transfer fix."
+            )
         yolo_weights = st.text_input("YOLO weights", value="yolo11n.pt")
         yolo_conf = st.slider("YOLO confidence threshold", min_value=0.01, max_value=0.95, value=0.25, step=0.01)
         device = st.selectbox("Device", options=["auto", get_default_device(), "cpu", "cuda", "mps"], index=0)

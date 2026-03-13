@@ -1,0 +1,5 @@
+Single experiment: capped the head-only stage at 2 epochs in `train.py` to push more of the 20-minute budget into `layer4+head`, then ran `python train.py` on MPS.
+
+Run `20260313_023700_839b41` logged `top1_val_acc=0.977702` and `top1_test_acc=0.973937` in `artifacts/autoresearch_log.csv`. It matched, but did not exceed, the pre-cycle best `0.977702`.
+
+Decision: reverted `train.py` to its pre-cycle contents.
