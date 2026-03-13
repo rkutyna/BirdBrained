@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 1800  # 30 minutes
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "enable TTA"
+NOTES = "enable GeM pooling"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -111,7 +111,7 @@ MIXUP_ALPHA = 0.0    # 0 = off; try 0.2 for standard Mixup
 USE_TRIVIAL_AUGMENT = False  # replaces ColorJitter with TrivialAugmentWide
 
 # --- Generalized Mean (GeM) pooling ---
-USE_GEM_POOLING = False  # replaces avgpool in ResNet-50; learns to focus on discriminative regions
+USE_GEM_POOLING = True  # replaces avgpool in ResNet-50; learns to focus on discriminative regions
 GEM_P_INIT = 3.0         # initial p (learnable parameter; 1=avg, inf=max)
 
 # --- Exponential Moving Average (EMA) ---
