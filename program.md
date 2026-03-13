@@ -32,7 +32,8 @@ This is the single number reported in `artifacts/autoresearch_log.csv`. The goal
 
 Modify `train.py` -- this is the **only file you edit**. Everything in the CONFIGURATION section is fair game:
 
-- **Augmentation pipeline**: `CROP_SCALE_MIN/MAX`, `JITTER_*`, `RANDOM_ERASING_*`, or add new transforms in `build_transforms()`
+**Basic options:**
+- **Augmentation pipeline**: `CROP_SCALE_MIN/MAX`, `JITTER_*`, `RANDOM_ERASING_*`
 - **Learning rates**: per-stage `lr` values in the `STAGES` list
 - **Stage structure**: number of stages, which layers to unfreeze, max epochs per stage
 - **Dropout rate**: `DROPOUT`
@@ -45,7 +46,19 @@ Modify `train.py` -- this is the **only file you edit**. Everything in the CONFI
 - **Time budget**: `TIME_BUDGET_SEC` (only if explicitly instructed)
 - **NOTES**: always update this to describe what you changed
 
-You may also modify `build_transforms()`, `build_model()`, `build_optimizer()`, `build_scheduler()`, and the training loop functions for more structural changes (e.g. adding mixup, changing the head architecture, adding gradient clipping).
+**Pre-staged advanced techniques (all OFF by default — toggle to enable):**
+- **CutMix**: `CUTMIX_ALPHA` -- set >0 (try 1.0) to paste random patches between images. Forces the model to classify from partial views, preventing over-reliance on a single region. Critical for fine-grained.
+- **Mixup**: `MIXUP_ALPHA` -- set >0 (try 0.2) to blend pairs of images and labels. When both CutMix and Mixup are >0, each batch randomly gets one or the other.
+- **TrivialAugmentWide**: `USE_TRIVIAL_AUGMENT = True` -- replaces ColorJitter with a parameter-free augmentation that randomly selects one operation per image. Zero tuning needed.
+- **GeM pooling**: `USE_GEM_POOLING = True` -- replaces average pooling with learnable Generalized Mean pooling. Focuses on strongly activated (discriminative) regions. +1-2% for fine-grained.
+- **EMA**: `USE_EMA = True`, `EMA_DECAY` -- maintains smoothed model weights. The EMA model is used for evaluation and checkpointing. Reliable regularizer for small datasets.
+- **Gradient clipping**: `GRAD_CLIP_NORM` -- set >0 (try 1.0) to clip gradient norms. Stabilizes training when unfreezing pretrained layers.
+- **TTA**: `USE_TTA = True` -- horizontal flip test-time augmentation at final evaluation. Free +0.5-1% accuracy (only costs 2x inference, no training cost).
+- **Warmup**: `WARMUP_EPOCHS` -- set >0 (try 2) for linear LR warmup at the start of each stage. Prevents large destructive updates when unfreezing new layers.
+- **LLRD**: `LLRD_DECAY` -- set >0 (try 0.8) for layer-wise learning rate decay. Earlier ResNet layers get exponentially lower LR, preserving transferable features. ResNet-50 only.
+- **Focal loss**: `USE_FOCAL_LOSS = True`, `FOCAL_GAMMA` -- down-weights easy examples, focuses on confusing species pairs.
+
+You may also modify `build_transforms()`, `build_model()`, `build_optimizer()`, `build_scheduler()`, and the training loop functions for more structural changes.
 
 ## What you CANNOT do
 
@@ -102,7 +115,7 @@ LOOP FOREVER:
 - **Read the log before every run.** The history tells you what has and hasn't worked.
 - **Don't waste budget on things already tried.** If dropout=0.6 already regressed, don't try it again.
 - **Think about the time budget.** With 30 minutes, you have room for all 3 stages and some extra depth, but not unlimited epochs. Optimise the stage structure for the budget.
-- **Low-hanging fruit first.** Try optimizer/LR/scheduler changes before architectural changes.
+- **Low-hanging fruit first.** Try optimizer/LR/scheduler changes first, then explore the pre-staged advanced techniques (CutMix, GeM, LLRD, TTA, etc.) before writing entirely new code.
 
 ### Crashes
 

@@ -12,6 +12,7 @@ Usage:
 """
 from __future__ import annotations
 
+import copy
 import csv
 import os
 import pickle
@@ -27,6 +28,7 @@ import pandas as pd
 from PIL import Image, ImageOps
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import models, transforms
@@ -99,6 +101,39 @@ SCHEDULER_GAMMA = 0.5  # for step
 
 # --- Mixed precision ---
 USE_AMP = True  # float16 on CUDA/MPS — roughly 30% faster per epoch
+
+# --- CutMix / Mixup ---
+CUTMIX_ALPHA = 0.0   # 0 = off; try 1.0 for standard CutMix
+MIXUP_ALPHA = 0.0    # 0 = off; try 0.2 for standard Mixup
+# When both > 0, each batch randomly gets one or the other (50/50).
+
+# --- TrivialAugmentWide ---
+USE_TRIVIAL_AUGMENT = False  # replaces ColorJitter with TrivialAugmentWide
+
+# --- Generalized Mean (GeM) pooling ---
+USE_GEM_POOLING = False  # replaces avgpool in ResNet-50; learns to focus on discriminative regions
+GEM_P_INIT = 3.0         # initial p (learnable parameter; 1=avg, inf=max)
+
+# --- Exponential Moving Average (EMA) ---
+USE_EMA = False    # smoothed model weights for evaluation/checkpoint
+EMA_DECAY = 0.999  # higher = more smoothing; 0.999 standard for ~10k samples
+
+# --- Gradient clipping ---
+GRAD_CLIP_NORM = 0.0  # 0 = off; try 1.0 to stabilize unfreezing stages
+
+# --- Test-time augmentation (TTA) ---
+USE_TTA = False  # horizontal flip TTA at final evaluation only (free accuracy)
+
+# --- Learning rate warmup ---
+WARMUP_EPOCHS = 0  # 0 = off; try 2. Linear warmup per stage before scheduler
+
+# --- Layer-wise learning rate decay (LLRD) ---
+LLRD_DECAY = 0.0  # 0 = off; try 0.8. Earlier ResNet layers get lower LR (ResNet-50 only)
+
+# --- Focal loss ---
+USE_FOCAL_LOSS = False  # down-weights easy examples, focuses on confusing species pairs
+FOCAL_GAMMA = 2.0       # higher = more focus on hard examples (0 = standard CE)
+
 
 # ===================================================================
 # CONSTANTS — do not modify
@@ -231,28 +266,150 @@ def append_log_row(row: dict[str, object]) -> None:
 
 
 # ===================================================================
+# ADVANCED COMPONENTS — GeM pooling, EMA, Focal loss, CutMix/Mixup
+# ===================================================================
+class GeM(nn.Module):
+    """Generalized Mean pooling — learns to focus on discriminative regions.
+
+    p=1 is average pooling, p->inf is max pooling. Initialized at p=3, the
+    network learns the optimal trade-off. Consistently +1-2% on fine-grained
+    recognition vs standard average pooling.
+    """
+    def __init__(self, p: float = 3.0, eps: float = 1e-6):
+        super().__init__()
+        self.p = nn.Parameter(torch.ones(1) * p)
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.avg_pool2d(
+            x.clamp(min=self.eps).pow(self.p),
+            (x.size(-2), x.size(-1)),
+        ).pow(1.0 / self.p)
+
+
+class ModelEMA:
+    """Exponential Moving Average of model weights for smoother evaluation.
+
+    Maintains a shadow copy whose weights are a running average of the training
+    model. Use ema.ema_model for evaluation — it generalizes better than any
+    single training snapshot, especially on small datasets.
+    """
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.ema_model = copy.deepcopy(model)
+        self.ema_model.eval()
+        self.decay = decay
+        for p in self.ema_model.parameters():
+            p.requires_grad_(False)
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        for ema_p, model_p in zip(self.ema_model.parameters(), model.parameters()):
+            ema_p.data.mul_(self.decay).add_(model_p.data, alpha=1.0 - self.decay)
+        for ema_b, model_b in zip(self.ema_model.buffers(), model.buffers()):
+            ema_b.data.copy_(model_b.data)
+
+
+class FocalLoss(nn.Module):
+    """Focal loss — down-weights well-classified examples.
+
+    For fine-grained classification, many species are easy to tell apart while
+    a few confusing pairs dominate errors. Focal loss spends more capacity on
+    those hard pairs. gamma=0 reduces to standard cross-entropy.
+    """
+    def __init__(self, gamma: float = 2.0, label_smoothing: float = 0.0):
+        super().__init__()
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        ce = F.cross_entropy(
+            logits, targets, reduction="none", label_smoothing=self.label_smoothing,
+        )
+        pt = torch.exp(-ce)
+        return (((1 - pt) ** self.gamma) * ce).mean()
+
+
+def cutmix_data(
+    images: torch.Tensor, targets: torch.Tensor, alpha: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    """Apply CutMix: paste a random patch from a shuffled image onto each image.
+
+    Returns (mixed_images, targets_a, targets_b, lam) where lam is the
+    proportion of the original image remaining.
+    """
+    lam = np.random.beta(alpha, alpha)
+    index = torch.randperm(images.size(0), device=images.device)
+    H, W = images.size(2), images.size(3)
+    cut_ratio = np.sqrt(1.0 - lam)
+    cut_w = max(1, int(W * cut_ratio))
+    cut_h = max(1, int(H * cut_ratio))
+    cx = np.random.randint(W)
+    cy = np.random.randint(H)
+    x1 = max(0, cx - cut_w // 2)
+    y1 = max(0, cy - cut_h // 2)
+    x2 = min(W, cx + cut_w // 2)
+    y2 = min(H, cy + cut_h // 2)
+    images[:, :, y1:y2, x1:x2] = images[index, :, y1:y2, x1:x2]
+    lam = 1.0 - (x2 - x1) * (y2 - y1) / (W * H)
+    return images, targets, targets[index], lam
+
+
+def mixup_data(
+    images: torch.Tensor, targets: torch.Tensor, alpha: float = 0.2,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    """Apply Mixup: blend two images and their labels proportionally."""
+    lam = np.random.beta(alpha, alpha)
+    index = torch.randperm(images.size(0), device=images.device)
+    mixed = lam * images + (1 - lam) * images[index]
+    return mixed, targets, targets[index], lam
+
+
+def mixup_criterion(
+    criterion: nn.Module,
+    logits: torch.Tensor,
+    targets_a: torch.Tensor,
+    targets_b: torch.Tensor,
+    lam: float,
+) -> torch.Tensor:
+    """Weighted loss for CutMix/Mixup — blends loss for both target sets."""
+    return lam * criterion(logits, targets_a) + (1 - lam) * criterion(logits, targets_b)
+
+
+# ===================================================================
 # TRANSFORMS
 # ===================================================================
 def build_transforms():
-    train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(
-            TARGET_SIZE,
-            scale=(CROP_SCALE_MIN, CROP_SCALE_MAX),
-        ),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ColorJitter(
-            brightness=JITTER_BRIGHTNESS,
-            contrast=JITTER_CONTRAST,
-            saturation=JITTER_SATURATION,
-            hue=JITTER_HUE,
-        ),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-        transforms.RandomErasing(
-            p=RANDOM_ERASING_P,
-            scale=(0.02, RANDOM_ERASING_SCALE_MAX),
-        ),
-    ])
+    if USE_TRIVIAL_AUGMENT:
+        train_transform = transforms.Compose([
+            transforms.RandomResizedCrop(
+                TARGET_SIZE, scale=(CROP_SCALE_MIN, CROP_SCALE_MAX),
+            ),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.TrivialAugmentWide(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            transforms.RandomErasing(
+                p=RANDOM_ERASING_P, scale=(0.02, RANDOM_ERASING_SCALE_MAX),
+            ),
+        ])
+    else:
+        train_transform = transforms.Compose([
+            transforms.RandomResizedCrop(
+                TARGET_SIZE, scale=(CROP_SCALE_MIN, CROP_SCALE_MAX),
+            ),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.ColorJitter(
+                brightness=JITTER_BRIGHTNESS,
+                contrast=JITTER_CONTRAST,
+                saturation=JITTER_SATURATION,
+                hue=JITTER_HUE,
+            ),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            transforms.RandomErasing(
+                p=RANDOM_ERASING_P, scale=(0.02, RANDOM_ERASING_SCALE_MAX),
+            ),
+        ])
     eval_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
@@ -266,6 +423,8 @@ def build_transforms():
 def build_model(num_classes: int) -> nn.Module:
     if BACKBONE == "resnet50":
         model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+        if USE_GEM_POOLING:
+            model.avgpool = GeM(p=GEM_P_INIT)
         in_features = model.fc.in_features
         model.fc = nn.Sequential(
             nn.Dropout(p=DROPOUT),
@@ -303,19 +462,74 @@ def build_optimizer(params, lr: float):
         raise ValueError(f"Unknown optimizer: {OPTIMIZER}")
 
 
-def build_scheduler(optimizer):
+def build_optimizer_llrd(model: nn.Module, lr: float, decay_factor: float):
+    """Build optimizer with layer-wise learning rate decay for ResNet-50.
+
+    Earlier layers get exponentially lower LR. With decay=0.8 and 6 layer
+    groups, the stem gets ~0.33x the head LR. This preserves transferable
+    low-level features while letting later layers specialize.
+    """
+    layer_groups = [
+        ("conv1.", "bn1."),
+        ("layer1.",),
+        ("layer2.",),
+        ("layer3.",),
+        ("layer4.",),
+        ("fc.",),
+    ]
+    num_groups = len(layer_groups)
+    param_groups = []
+    for idx, prefixes in enumerate(layer_groups):
+        group_lr = lr * (decay_factor ** (num_groups - 1 - idx))
+        params = [
+            p for n, p in model.named_parameters()
+            if any(n.startswith(pf) for pf in prefixes) and p.requires_grad
+        ]
+        if params:
+            param_groups.append({"params": params, "lr": group_lr})
+    # Include GeM p parameter if present
+    if USE_GEM_POOLING and hasattr(model, "avgpool") and isinstance(model.avgpool, GeM):
+        gem_params = list(model.avgpool.parameters())
+        if gem_params:
+            param_groups.append({"params": gem_params, "lr": lr})
+    if not param_groups:
+        param_groups = [{"params": filter(lambda p: p.requires_grad, model.parameters()), "lr": lr}]
+    if OPTIMIZER == "adamw":
+        return torch.optim.AdamW(param_groups, weight_decay=WEIGHT_DECAY)
+    elif OPTIMIZER == "adam":
+        return torch.optim.Adam(param_groups, weight_decay=WEIGHT_DECAY)
+    elif OPTIMIZER == "sgd":
+        return torch.optim.SGD(param_groups, weight_decay=WEIGHT_DECAY, momentum=MOMENTUM)
+    else:
+        raise ValueError(f"Unknown optimizer: {OPTIMIZER}")
+
+
+def build_scheduler(optimizer, max_epochs: int | None = None):
     if SCHEDULER == "none":
+        if WARMUP_EPOCHS > 0:
+            return torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=0.01, end_factor=1.0, total_iters=WARMUP_EPOCHS,
+            )
         return None
-    elif SCHEDULER == "cosine":
-        return torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=SCHEDULER_T_MAX
+    if SCHEDULER == "cosine":
+        effective_epochs = max(1, (max_epochs or SCHEDULER_T_MAX) - WARMUP_EPOCHS)
+        main_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=effective_epochs, eta_min=1e-6,
         )
     elif SCHEDULER == "step":
-        return torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=SCHEDULER_STEP_SIZE, gamma=SCHEDULER_GAMMA
+        main_sched = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=SCHEDULER_STEP_SIZE, gamma=SCHEDULER_GAMMA,
         )
     else:
         raise ValueError(f"Unknown scheduler: {SCHEDULER}")
+    if WARMUP_EPOCHS > 0:
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=0.01, end_factor=1.0, total_iters=WARMUP_EPOCHS,
+        )
+        return torch.optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup, main_sched], milestones=[WARMUP_EPOCHS],
+        )
+    return main_sched
 
 
 # ===================================================================
@@ -356,6 +570,7 @@ def train_one_epoch(
     scheduler=None,
     deadline: float = float("inf"),
     scaler=None,
+    ema=None,
 ) -> tuple[float, float, bool]:
     """Train for one epoch. Returns (avg_loss, avg_acc, timed_out)."""
     model.train()
@@ -365,6 +580,8 @@ def train_one_epoch(
     can_non_block = non_blocking_transfer(device)
     use_amp = USE_AMP and device.type in ("cuda", "mps")
     amp_dtype = torch.bfloat16 if device.type == "cuda" else torch.float16
+    do_cutmix = CUTMIX_ALPHA > 0
+    do_mixup = MIXUP_ALPHA > 0
 
     for images, targets in loader:
         if time.time() >= deadline:
@@ -373,23 +590,54 @@ def train_one_epoch(
         images = images.to(device, non_blocking=can_non_block)
         targets = targets.to(device, non_blocking=can_non_block)
 
+        # CutMix / Mixup augmentation (applied per-batch on GPU)
+        mixed = False
+        if do_cutmix or do_mixup:
+            if do_cutmix and do_mixup:
+                use_cutmix = random.random() < 0.5
+            else:
+                use_cutmix = do_cutmix
+            if use_cutmix:
+                images, targets_a, targets_b, lam = cutmix_data(images, targets, CUTMIX_ALPHA)
+            else:
+                images, targets_a, targets_b, lam = mixup_data(images, targets, MIXUP_ALPHA)
+            mixed = True
+
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
             logits = model(images)
-            loss = criterion(logits, targets)
+            if mixed:
+                loss = mixup_criterion(criterion, logits, targets_a, targets_b, lam)
+            else:
+                loss = criterion(logits, targets)
 
         if scaler is not None:
             scaler.scale(loss).backward()
+            if GRAD_CLIP_NORM > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_NORM)
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
+            if GRAD_CLIP_NORM > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_NORM)
             optimizer.step()
 
+        if ema is not None:
+            ema.update(model)
+
+        batch_size = images.size(0)
         preds = logits.argmax(dim=1)
-        running_loss += loss.item() * targets.size(0)
-        correct += int(preds.eq(targets).sum())
-        total += targets.size(0)
+        running_loss += loss.item() * batch_size
+        if mixed:
+            correct += (
+                lam * preds.eq(targets_a).float().sum().item()
+                + (1 - lam) * preds.eq(targets_b).float().sum().item()
+            )
+        else:
+            correct += int(preds.eq(targets).sum())
+        total += batch_size
 
     if scheduler is not None:
         scheduler.step()
@@ -422,6 +670,44 @@ def evaluate(
             loss = criterion(logits, targets)
 
         preds = logits.argmax(dim=1)
+        running_loss += loss.item() * targets.size(0)
+        correct += int(preds.eq(targets).sum())
+        total += targets.size(0)
+
+    return running_loss / max(1, total), correct / max(1, total)
+
+
+@torch.no_grad()
+def evaluate_with_tta(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+) -> tuple[float, float]:
+    """Evaluate with horizontal-flip TTA. Returns (avg_loss, top1_accuracy).
+
+    Averages logits from the original image and its horizontal flip.
+    Typically +0.5-1% accuracy for free (only costs 2x inference time).
+    """
+    model.eval()
+    criterion = nn.CrossEntropyLoss()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    can_non_block = non_blocking_transfer(device)
+    use_amp = USE_AMP and device.type in ("cuda", "mps")
+    amp_dtype = torch.bfloat16 if device.type == "cuda" else torch.float16
+
+    for images, targets in loader:
+        images = images.to(device, non_blocking=can_non_block)
+        targets = targets.to(device, non_blocking=can_non_block)
+
+        with torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
+            logits_orig = model(images)
+            logits_flip = model(torch.flip(images, dims=[3]))
+
+        avg_logits = (logits_orig + logits_flip) / 2.0
+        loss = criterion(avg_logits, targets)
+        preds = avg_logits.argmax(dim=1)
         running_loss += loss.item() * targets.size(0)
         correct += int(preds.eq(targets).sum())
         total += targets.size(0)
@@ -487,11 +773,40 @@ def main():
 
     # --- Build model ---
     model = build_model(num_classes).to(device)
-    criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
+    if USE_FOCAL_LOSS:
+        criterion = FocalLoss(gamma=FOCAL_GAMMA, label_smoothing=LABEL_SMOOTHING)
+    else:
+        criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
     use_amp = USE_AMP and device.type in ("cuda", "mps")
     scaler = torch.amp.GradScaler("cuda") if use_amp and device.type == "cuda" else None
     print(f"Model: {BACKBONE} | Dropout: {DROPOUT} | Label smoothing: {LABEL_SMOOTHING}")
     print(f"AMP: {'ON' if use_amp else 'OFF'} | Workers: {NUM_WORKERS}")
+    extras = []
+    if USE_GEM_POOLING:
+        extras.append(f"GeM(p={GEM_P_INIT})")
+    if USE_EMA:
+        extras.append(f"EMA({EMA_DECAY})")
+    if CUTMIX_ALPHA > 0:
+        extras.append(f"CutMix(α={CUTMIX_ALPHA})")
+    if MIXUP_ALPHA > 0:
+        extras.append(f"Mixup(α={MIXUP_ALPHA})")
+    if USE_TRIVIAL_AUGMENT:
+        extras.append("TrivialAugment")
+    if GRAD_CLIP_NORM > 0:
+        extras.append(f"GradClip({GRAD_CLIP_NORM})")
+    if USE_TTA:
+        extras.append("TTA")
+    if WARMUP_EPOCHS > 0:
+        extras.append(f"Warmup({WARMUP_EPOCHS}ep)")
+    if LLRD_DECAY > 0:
+        extras.append(f"LLRD({LLRD_DECAY})")
+    if USE_FOCAL_LOSS:
+        extras.append(f"Focal(γ={FOCAL_GAMMA})")
+    if extras:
+        print(f"Extras: {', '.join(extras)}")
+
+    # --- EMA ---
+    ema = ModelEMA(model, decay=EMA_DECAY) if USE_EMA else None
 
     # --- Training loop with wall-clock budget ---
     wall_start = time.time()
@@ -513,6 +828,10 @@ def main():
         # Freeze / unfreeze
         for name, param in model.named_parameters():
             param.requires_grad = any(name.startswith(p) for p in prefixes)
+        # GeM p parameter should always be trainable when GeM is active
+        if USE_GEM_POOLING and hasattr(model, "avgpool") and isinstance(model.avgpool, GeM):
+            for p in model.avgpool.parameters():
+                p.requires_grad = True
 
         trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         total_params = sum(p.numel() for p in model.parameters())
@@ -520,10 +839,13 @@ def main():
         print(f"  Trainable: {trainable:,} / {total_params:,} ({100*trainable/total_params:.1f}%)")
         print(f"  LR: {lr} | Max epochs: {max_epochs}")
 
-        optimizer = build_optimizer(
-            filter(lambda p: p.requires_grad, model.parameters()), lr
-        )
-        scheduler = build_scheduler(optimizer)
+        if LLRD_DECAY > 0 and BACKBONE == "resnet50":
+            optimizer = build_optimizer_llrd(model, lr, LLRD_DECAY)
+        else:
+            optimizer = build_optimizer(
+                filter(lambda p: p.requires_grad, model.parameters()), lr
+            )
+        scheduler = build_scheduler(optimizer, max_epochs)
 
         for epoch in range(1, max_epochs + 1):
             if time.time() >= deadline:
@@ -532,7 +854,7 @@ def main():
 
             t0 = time.time()
             train_loss, train_acc, epoch_timed_out = train_one_epoch(
-                model, train_loader, criterion, optimizer, device, scheduler, deadline, scaler
+                model, train_loader, criterion, optimizer, device, scheduler, deadline, scaler, ema,
             )
             elapsed = time.time() - wall_start
 
@@ -547,7 +869,10 @@ def main():
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                if ema is not None:
+                    best_state = {k: v.cpu().clone() for k, v in ema.ema_model.state_dict().items()}
+                else:
+                    best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
             remaining = deadline - time.time()
             print(
@@ -557,8 +882,12 @@ def main():
             )
 
     # --- Restore best weights ---
+    eval_model = model
     if best_state is not None:
         model.load_state_dict(best_state)
+        eval_model = model
+    if ema is not None and best_state is None:
+        eval_model = ema.ema_model
 
     # === EVALUATION & LOGGING (do not modify below this line) =========
     wall_train_time = time.time() - wall_start
@@ -574,9 +903,10 @@ def main():
     print(f"Training complete: {total_epochs} epochs in {wall_train_time:.1f}s")
 
     # Final val evaluation with best weights
-    val_loss, val_acc = evaluate(model, val_loader, device)
+    eval_fn = evaluate_with_tta if USE_TTA else evaluate
+    val_loss, val_acc = eval_fn(eval_model, val_loader, device)
     print(f"Final val_loss={val_loss:.4f}  top1_val_acc={val_acc:.4f}")
-    test_loss, test_acc = evaluate(model, test_loader, device)
+    test_loss, test_acc = eval_fn(eval_model, test_loader, device)
     print(f"Final test_loss={test_loss:.4f} top1_test_acc={test_acc:.4f}")
 
     # Check against current best
@@ -585,7 +915,7 @@ def main():
     status = "keep" if is_new_best else "discard"
     if is_new_best:
         print(f"NEW BEST! {val_acc:.4f} > {prev_best:.4f}")
-        torch.save(model.state_dict(), BEST_CKPT)
+        torch.save(eval_model.state_dict(), BEST_CKPT)
         print(f"Checkpoint saved: {BEST_CKPT}")
     else:
         print(f"Not a new best ({val_acc:.4f} <= {prev_best:.4f}), checkpoint not saved.")
