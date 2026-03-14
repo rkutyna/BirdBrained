@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 3600  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "LLRD decay=0.8"
+NOTES = "cap stage2 at 4 to extend stage3"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -62,13 +62,13 @@ STAGES = [
         "name": "head_only",
         "unfreeze": ("fc.",),
         "lr": 1e-2,
-        "max_epochs": 6,
+        "max_epochs": 3,
     },
     {
         "name": "layer4+head",
         "unfreeze": ("layer4.", "fc."),
         "lr": 1e-4,
-        "max_epochs": 5,
+        "max_epochs": 4,
     },
     {
         "name": "layer3+layer4+head",
