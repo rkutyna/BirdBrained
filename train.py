@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 3600  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "disable warmup for earlier stage3 learning"
+NOTES = "cap stage1 at 1 to extend stage3"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -62,7 +62,7 @@ STAGES = [
         "name": "head_only",
         "unfreeze": ("fc.",),
         "lr": 1e-2,
-        "max_epochs": 2,
+        "max_epochs": 1,
     },
     {
         "name": "layer4+head",
