@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 3600  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "cap stage1 at 2 to extend stage3"
+NOTES = "disable warmup for earlier stage3 learning"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -128,7 +128,7 @@ GRAD_CLIP_NORM = 0.0  # 0 = off; try 1.0 to stabilize unfreezing stages
 USE_TTA = True  # horizontal flip TTA at final evaluation only (free accuracy)
 
 # --- Learning rate warmup ---
-WARMUP_EPOCHS = 2  # 0 = off; try 2. Linear warmup per stage before scheduler
+WARMUP_EPOCHS = 0  # 0 = off; try 2. Linear warmup per stage before scheduler
 
 # --- Layer-wise learning rate decay (LLRD) ---
 LLRD_DECAY = 0.8  # 0 = off; try 0.8. Earlier ResNet layers get lower LR (ResNet-50 only)
