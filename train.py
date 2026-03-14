@@ -38,14 +38,17 @@ from torchvision import models, transforms
 # ===================================================================
 
 # Wall-clock time budget for the entire run (training only, excludes eval)
-TIME_BUDGET_SEC = 1800  # 30 minutes
+TIME_BUDGET_SEC = 3600  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "cap stage2 at 5 to extend stage3"
+NOTES = "LLRD decay=0.8"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
 DROPOUT = 0.4
+
+# --- Species mode ---
+SPECIES_MODE = "full555"  # set by autorun.py --species
 
 # --- Data ---
 BATCH_SIZE = 32
@@ -125,10 +128,10 @@ GRAD_CLIP_NORM = 0.0  # 0 = off; try 1.0 to stabilize unfreezing stages
 USE_TTA = True  # horizontal flip TTA at final evaluation only (free accuracy)
 
 # --- Learning rate warmup ---
-WARMUP_EPOCHS = 0  # 0 = off; try 2. Linear warmup per stage before scheduler
+WARMUP_EPOCHS = 2  # 0 = off; try 2. Linear warmup per stage before scheduler
 
 # --- Layer-wise learning rate decay (LLRD) ---
-LLRD_DECAY = 0.0  # 0 = off; try 0.8. Earlier ResNet layers get lower LR (ResNet-50 only)
+LLRD_DECAY = 0.8  # 0 = off; try 0.8. Earlier ResNet layers get lower LR (ResNet-50 only)
 
 # --- Focal loss ---
 USE_FOCAL_LOSS = False  # down-weights easy examples, focuses on confusing species pairs
@@ -147,10 +150,19 @@ IMAGENET_PAD_RGB = tuple(int(round(c * 255)) for c in IMAGENET_MEAN)
 DATA_ROOT = Path("NABirds Dataset/nabirds")
 IMAGES_DIR = DATA_ROOT / "images"
 ARTIFACTS_DIR = Path("artifacts")
-CACHE_PKL = ARTIFACTS_DIR / "autoresearch_splits.pkl"
-LABEL_NAMES_CSV = ARTIFACTS_DIR / "label_names.csv"
-LOG_CSV = ARTIFACTS_DIR / "autoresearch_log.csv"
-BEST_CKPT = ARTIFACTS_DIR / "autoresearch_best.pt"
+
+# Paths derived from SPECIES_MODE
+if SPECIES_MODE == "full555":
+    CACHE_PKL = ARTIFACTS_DIR / "autoresearch_splits_full555.pkl"
+    LABEL_NAMES_CSV = ARTIFACTS_DIR / "label_names_nabirds_all_specific.csv"
+    LOG_CSV = ARTIFACTS_DIR / "autoresearch_log_full555.csv"
+    BEST_CKPT = ARTIFACTS_DIR / "autoresearch_best_full555.pt"
+else:
+    CACHE_PKL = ARTIFACTS_DIR / "autoresearch_splits.pkl"
+    LABEL_NAMES_CSV = ARTIFACTS_DIR / "label_names.csv"
+    LOG_CSV = ARTIFACTS_DIR / "autoresearch_log.csv"
+    BEST_CKPT = ARTIFACTS_DIR / "autoresearch_best.pt"
+PROGRESS_FILE = ARTIFACTS_DIR / "autoresearch_progress.json"
 
 LOG_COLUMNS = [
     "run_id",
@@ -264,6 +276,25 @@ def append_log_row(row: dict[str, object]) -> None:
     with open(LOG_CSV, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=LOG_COLUMNS)
         writer.writerow({k: row.get(k, "") for k in LOG_COLUMNS})
+
+
+def write_progress(
+    stage: str, epoch: int, elapsed_sec: float,
+    remaining_sec: float, budget_sec: float, best_val_acc: float,
+) -> None:
+    """Write a progress file that the outer autorun loop can poll."""
+    import json as _json
+    PROGRESS_FILE.write_text(
+        _json.dumps({
+            "stage": stage,
+            "epoch": epoch,
+            "elapsed_sec": round(elapsed_sec),
+            "remaining_sec": round(remaining_sec),
+            "budget_sec": round(budget_sec),
+            "best_val_acc": round(best_val_acc, 6),
+        }),
+        encoding="utf-8",
+    )
 
 
 # ===================================================================
@@ -965,6 +996,7 @@ def main():
                 f"val_loss={val_loss:.4f} val_acc={val_acc:.4f} "
                 f"best={best_val_acc:.4f} [{elapsed:.0f}s elapsed, {remaining:.0f}s left]"
             )
+            write_progress(stage_name, epoch, elapsed, remaining, TIME_BUDGET_SEC, best_val_acc)
 
     # --- Restore best weights ---
     eval_model = model
@@ -1037,6 +1069,10 @@ def main():
     print(f"notes:            {NOTES}")
     print(f"analysis:         {analysis}")
     print(f"{'='*60}")
+
+    # Clean up progress file
+    if PROGRESS_FILE.exists():
+        PROGRESS_FILE.unlink()
 
 
 if __name__ == "__main__":
