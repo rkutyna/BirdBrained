@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 1800  # 30 minutes
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "enable GeM pooling"
+NOTES = "cap stage2 at 5 to extend stage3"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -65,7 +65,7 @@ STAGES = [
         "name": "layer4+head",
         "unfreeze": ("layer4.", "fc."),
         "lr": 1e-4,
-        "max_epochs": 6,
+        "max_epochs": 5,
     },
     {
         "name": "layer3+layer4+head",
@@ -163,6 +163,7 @@ LOG_COLUMNS = [
     "time_budget_sec",
     "status",
     "notes",
+    "analysis",
 ]
 
 
@@ -263,6 +264,84 @@ def append_log_row(row: dict[str, object]) -> None:
     with open(LOG_CSV, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=LOG_COLUMNS)
         writer.writerow({k: row.get(k, "") for k in LOG_COLUMNS})
+
+
+# ===================================================================
+# TRAINING ANALYSIS — automatic diagnostics after each experiment
+# ===================================================================
+def analyze_training(
+    epoch_history: list[dict],
+    timed_out: bool,
+    best_val_acc: float,
+    prev_best: float,
+) -> str:
+    """Analyze epoch history and return diagnostic string.
+
+    Detects: overfitting, underfitting, convergence issues, time pressure,
+    val_acc plateau, and regression vs previous best.
+    """
+    findings = []
+
+    if not epoch_history:
+        return "no_epochs_completed"
+
+    last = epoch_history[-1]
+    first = epoch_history[0]
+    train_accs = [e["train_acc"] for e in epoch_history]
+    val_accs = [e["val_acc"] for e in epoch_history]
+    best_epoch = max(range(len(val_accs)), key=lambda i: val_accs[i])
+
+    # --- Overfitting: large train/val gap ---
+    gap = last["train_acc"] - last["val_acc"]
+    if gap > 0.10:
+        findings.append(f"OVERFITTING(gap={gap:.3f})")
+    elif gap > 0.05:
+        findings.append(f"mild_overfit(gap={gap:.3f})")
+
+    # --- Underfitting: both accuracies low ---
+    if last["val_acc"] < 0.5 and last["train_acc"] < 0.6:
+        findings.append("UNDERFITTING")
+
+    # --- Val accuracy still improving at end (could use more epochs) ---
+    if len(val_accs) >= 3:
+        recent = val_accs[-3:]
+        if recent[-1] >= max(recent[:-1]):
+            findings.append("val_still_improving")
+
+    # --- Val accuracy peaked early then declined ---
+    if best_epoch < len(val_accs) - 1:
+        decline = val_accs[best_epoch] - last["val_acc"]
+        epochs_since = len(val_accs) - 1 - best_epoch
+        if decline > 0.01 and epochs_since >= 2:
+            findings.append(f"val_peaked_epoch_{best_epoch+1}(decline={decline:.3f})")
+
+    # --- Plateau: val accuracy barely changed over last N epochs ---
+    if len(val_accs) >= 4:
+        recent_range = max(val_accs[-4:]) - min(val_accs[-4:])
+        if recent_range < 0.005:
+            findings.append(f"plateau(range={recent_range:.4f})")
+
+    # --- Time pressure ---
+    if timed_out:
+        findings.append("hit_time_budget")
+
+    # --- Regression vs previous best ---
+    if prev_best > 0:
+        delta = best_val_acc - prev_best
+        if delta < -0.01:
+            findings.append(f"REGRESSED(delta={delta:+.4f})")
+        elif delta > 0.005:
+            findings.append(f"improved(delta={delta:+.4f})")
+        else:
+            findings.append(f"flat(delta={delta:+.4f})")
+
+    # --- Summary stats ---
+    findings.append(
+        f"train_acc={last['train_acc']:.4f},val_acc={last['val_acc']:.4f},"
+        f"best_at_epoch_{best_epoch+1}/{len(val_accs)}"
+    )
+
+    return "; ".join(findings)
 
 
 # ===================================================================
@@ -815,6 +894,7 @@ def main():
     best_state = None
     timed_out = False
     total_epochs = 0
+    epoch_history: list[dict] = []
 
     for stage_idx, stage in enumerate(STAGES):
         if timed_out:
@@ -866,6 +946,11 @@ def main():
             # Quick val check to track best
             val_loss, val_acc = evaluate(model, val_loader, device)
             total_epochs += 1
+            epoch_history.append({
+                "stage": stage_name, "epoch": epoch,
+                "train_loss": train_loss, "train_acc": train_acc,
+                "val_loss": val_loss, "val_acc": val_acc,
+            })
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
@@ -920,6 +1005,10 @@ def main():
     else:
         print(f"Not a new best ({val_acc:.4f} <= {prev_best:.4f}), checkpoint not saved.")
 
+    # Auto-analyze training trajectory
+    analysis = analyze_training(epoch_history, timed_out, best_val_acc, prev_best)
+    print(f"Analysis: {analysis}")
+
     # Append to log
     append_log_row({
         "run_id": run_id,
@@ -932,6 +1021,7 @@ def main():
         "time_budget_sec": TIME_BUDGET_SEC,
         "status": status,
         "notes": NOTES,
+        "analysis": analysis,
     })
     print(f"Logged to {LOG_CSV}")
 
@@ -945,6 +1035,7 @@ def main():
     print(f"time_budget_sec:  {TIME_BUDGET_SEC}")
     print(f"status:           {status}")
     print(f"notes:            {NOTES}")
+    print(f"analysis:         {analysis}")
     print(f"{'='*60}")
 
 
