@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 3600  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "disable LLRD on skip stage1 setup"
+NOTES = "shorter stage2 + higher stage2 lr"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -61,8 +61,8 @@ STAGES = [
     {
         "name": "layer4+head",
         "unfreeze": ("layer4.", "fc."),
-        "lr": 2e-4,
-        "max_epochs": 4,
+        "lr": 3e-4,
+        "max_epochs": 3,
     },
     {
         "name": "layer3+layer4+head",
