@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 3600  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "shorter stage2 + higher stage2 lr"
+NOTES = "NUM_WORKERS=4 for more stage3 throughput"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -52,7 +52,7 @@ SPECIES_MODE = "full555"  # set by autorun.py --species
 
 # --- Data ---
 BATCH_SIZE = 32
-NUM_WORKERS = 2
+NUM_WORKERS = 4
 
 # --- Training stages ---
 # Each stage: (prefixes_to_unfreeze, lr, max_epochs)
