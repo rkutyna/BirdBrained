@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 3600  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "cap stage1 at 1 to extend stage3"
+NOTES = "enable EMA"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -118,7 +118,7 @@ USE_GEM_POOLING = True  # replaces avgpool in ResNet-50; learns to focus on disc
 GEM_P_INIT = 3.0         # initial p (learnable parameter; 1=avg, inf=max)
 
 # --- Exponential Moving Average (EMA) ---
-USE_EMA = False    # smoothed model weights for evaluation/checkpoint
+USE_EMA = True     # smoothed model weights for evaluation/checkpoint
 EMA_DECAY = 0.999  # higher = more smoothing; 0.999 standard for ~10k samples
 
 # --- Gradient clipping ---
