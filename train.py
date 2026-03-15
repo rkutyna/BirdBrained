@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 3600  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "skip stage1 + stage2 lr=2e-4"
+NOTES = "disable LLRD on skip stage1 setup"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -125,7 +125,7 @@ USE_TTA = True  # horizontal flip TTA at final evaluation only (free accuracy)
 WARMUP_EPOCHS = 0  # 0 = off; try 2. Linear warmup per stage before scheduler
 
 # --- Layer-wise learning rate decay (LLRD) ---
-LLRD_DECAY = 0.8  # 0 = off; try 0.8. Earlier ResNet layers get lower LR (ResNet-50 only)
+LLRD_DECAY = 0.0  # 0 = off; try 0.8. Earlier ResNet layers get lower LR (ResNet-50 only)
 
 # --- Focal loss ---
 USE_FOCAL_LOSS = False  # down-weights easy examples, focuses on confusing species pairs
