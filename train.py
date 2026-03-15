@@ -38,10 +38,10 @@ from torchvision import models, transforms
 # ===================================================================
 
 # Wall-clock time budget for the entire run (training only, excludes eval)
-TIME_BUDGET_SEC = 3600  # set by autorun.py --time-budget
+TIME_BUDGET_SEC = 7200  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "NUM_WORKERS=4 for more stage3 throughput"
+NOTES = "stage3 lr=7.5e-5 + cap=15 for 7200s"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -67,8 +67,8 @@ STAGES = [
     {
         "name": "layer3+layer4+head",
         "unfreeze": ("layer3.", "layer4.", "fc."),
-        "lr": 1e-4,
-        "max_epochs": 8,
+        "lr": 7.5e-5,
+        "max_epochs": 15,
     },
 ]
 
