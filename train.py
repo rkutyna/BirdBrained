@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 7200  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "cap layer4 stage at 2 for 7200s"
+NOTES = "shift 1 epoch from layer4 to stage3"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -62,13 +62,13 @@ STAGES = [
         "name": "layer4+head",
         "unfreeze": ("layer4.", "fc."),
         "lr": 3e-4,
-        "max_epochs": 2,
+        "max_epochs": 1,
     },
     {
         "name": "layer3+layer4+head",
         "unfreeze": ("layer3.", "layer4.", "fc."),
         "lr": 7.5e-5,
-        "max_epochs": 15,
+        "max_epochs": 16,
     },
 ]
 
