@@ -38,31 +38,58 @@ from torchvision import models, transforms
 # ===================================================================
 
 # Wall-clock time budget for the entire run (training only, excludes eval)
-TIME_BUDGET_SEC = 7200  # set by autorun.py --time-budget
+TIME_BUDGET_SEC = 2400  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "TrivialAugment on best 7200s single-stage setup"
+NOTES = "stage3 cap=6 + add layer2 lr=2e-5"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
 DROPOUT = 0.4
 
 # --- Species mode ---
-SPECIES_MODE = "full555"  # set by autorun.py --species
+SPECIES_MODE = "subset98"  # set by autorun.py --species
 
 # --- Data ---
 BATCH_SIZE = 32
-NUM_WORKERS = 4
+NUM_WORKERS = 2
 
 # --- Training stages ---
 # Each stage: (prefixes_to_unfreeze, lr, max_epochs)
 # Training will proceed through stages in order until TIME_BUDGET_SEC is hit.
+# Available unfreeze prefixes (any combination, in any order):
+#   "fc."     — classification head only
+#   "layer4." — final ResNet block + head
+#   "layer3." — 3rd ResNet block + above
+#   "layer2." — 2nd ResNet block + above
+#   "layer1." — 1st ResNet block + above (near full fine-tune)
+#   "layer1.", "layer2.", "layer3.", "layer4.", "fc." — full fine-tune
+# Typical strategy: start shallow (head → layer4 → layer3) then optionally
+# add layer2/layer1 stages for deeper fine-tuning with a lower LR.
 STAGES = [
+    {
+        "name": "head_only",
+        "unfreeze": ("fc.",),
+        "lr": 1e-2,
+        "max_epochs": 6,
+    },
+    {
+        "name": "layer4+head",
+        "unfreeze": ("layer4.", "fc."),
+        "lr": 1e-4,
+        "max_epochs": 4,
+    },
     {
         "name": "layer3+layer4+head",
         "unfreeze": ("layer3.", "layer4.", "fc."),
         "lr": 1e-4,
-        "max_epochs": 20,
+        "max_epochs": 6,
+    },
+    {
+        "name": "layer2+layer3+layer4+head",
+        "unfreeze": ("layer2.", "layer3.", "layer4.", "fc."),
+        "lr": 2e-5,
+        "max_epochs": 4,
     },
 ]
 
@@ -99,14 +126,14 @@ MIXUP_ALPHA = 0.0    # 0 = off; try 0.2 for standard Mixup
 # When both > 0, each batch randomly gets one or the other (50/50).
 
 # --- TrivialAugmentWide ---
-USE_TRIVIAL_AUGMENT = True  # replaces ColorJitter with TrivialAugmentWide
+USE_TRIVIAL_AUGMENT = False  # replaces ColorJitter with TrivialAugmentWide
 
 # --- Generalized Mean (GeM) pooling ---
 USE_GEM_POOLING = True  # replaces avgpool in ResNet-50; learns to focus on discriminative regions
 GEM_P_INIT = 3.0         # initial p (learnable parameter; 1=avg, inf=max)
 
 # --- Exponential Moving Average (EMA) ---
-USE_EMA = True     # smoothed model weights for evaluation/checkpoint
+USE_EMA = False    # smoothed model weights for evaluation/checkpoint
 EMA_DECAY = 0.999  # higher = more smoothing; 0.999 standard for ~10k samples
 
 # --- Gradient clipping ---
