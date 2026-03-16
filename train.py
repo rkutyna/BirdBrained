@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 7200  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "skip layer4 stage + stage3 lr=1e-4"
+NOTES = "TrivialAugment on best 7200s single-stage setup"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -99,7 +99,7 @@ MIXUP_ALPHA = 0.0    # 0 = off; try 0.2 for standard Mixup
 # When both > 0, each batch randomly gets one or the other (50/50).
 
 # --- TrivialAugmentWide ---
-USE_TRIVIAL_AUGMENT = False  # replaces ColorJitter with TrivialAugmentWide
+USE_TRIVIAL_AUGMENT = True  # replaces ColorJitter with TrivialAugmentWide
 
 # --- Generalized Mean (GeM) pooling ---
 USE_GEM_POOLING = True  # replaces avgpool in ResNet-50; learns to focus on discriminative regions
