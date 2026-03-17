@@ -1,0 +1,15 @@
+[
+  {
+    "analysis": "mild_overfit(gap=0.072); hit_time_budget; REGRESSED(delta=-0.0294); train_acc=0.9418,val_acc=0.8697,best_at_epoch_15/16",
+    "notes": "skip layer4 stage + stage3 lr=1.1e-4",
+    "peak_memory_mb": "602.3",
+    "run_id": "20260316_071909_b111d4",
+    "status": "discard",
+    "time_budget_sec": "7200",
+    "timestamp": "2026-03-16T09:21:49",
+    "top1_test_acc": "0.911299",
+    "top1_val_acc": "0.902163",
+    "total_epochs": "16",
+    "training_seconds": "7200.3"
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "name": "enable focal loss gamma=1.5",
+  "set": {
+    "FOCAL_GAMMA": 1.5,
+    "NOTES": "enable focal loss gamma=1.5",
+    "USE_FOCAL_LOSS": true
+  },
+  "source": "artifacts/autoresearch_runner/iter_0018_20260313_215905/train_before.py"
+}

@@ -8,6 +8,10 @@ The training uses a progressive unfreezing strategy:
 1. **Stage 1** -- train the FC head only (backbone frozen)
 2. **Stage 2** -- unfreeze `layer4` + FC
 3. **Stage 3** -- unfreeze `layer3` + `layer4` + FC
+4. **Stage 4** *(optional)* -- unfreeze `layer2` + above
+5. **Stage 5** *(optional)* -- unfreeze `layer1` + above (near full fine-tune)
+
+Stages are fully configurable — you can use any combination of `"layer1."`, `"layer2."`, `"layer3."`, `"layer4."`, `"fc."` as unfreeze prefixes, in any order.
 
 Each run is constrained to a **fixed wall-clock time budget** (default 30 minutes) so that all experiments are directly comparable regardless of architectural changes. Training stops at the budget or when all stages complete, whichever comes first.
 
@@ -35,7 +39,7 @@ Modify `train.py` -- this is the **only file you edit**. Everything in the CONFI
 **Basic options:**
 - **Augmentation pipeline**: `CROP_SCALE_MIN/MAX`, `JITTER_*`, `RANDOM_ERASING_*`
 - **Learning rates**: per-stage `lr` values in the `STAGES` list
-- **Stage structure**: number of stages, which layers to unfreeze, max epochs per stage
+- **Stage structure**: number of stages, which layers to unfreeze (`"layer1."` through `"layer4."` + `"fc."`), max epochs per stage. You can add deeper stages unfreezing `layer2` and `layer1` for more aggressive fine-tuning at a lower LR (e.g. `1e-5`).
 - **Dropout rate**: `DROPOUT`
 - **Backbone**: `BACKBONE` -- swap to `"efficientnet_b0"` or `"mobilenet_v3_large"` (support is already wired in)
 - **Label smoothing**: `LABEL_SMOOTHING`
@@ -88,7 +92,19 @@ peak_memory_mb:   1234.5
 time_budget_sec:  1800
 status:           keep
 notes:            cap stage1 at 6 epochs to reach stage2
+analysis:         val_still_improving; improved(delta=+0.0123); train_acc=0.8912,val_acc=0.9065,best_at_epoch_23/24
 ```
+
+The `analysis` field is auto-generated and flags issues like:
+- `OVERFITTING(gap=0.12)` — train/val accuracy gap too large, needs more regularization
+- `val_peaked_epoch_5(decline=0.015)` — val peaked early then fell, sign of overfitting after that point
+- `val_still_improving` — accuracy was still going up when budget ran out, consider more epochs
+- `plateau(range=0.003)` — val barely changed over last 4 epochs, diminishing returns
+- `UNDERFITTING` — both accuracies low, model capacity or LR may be too limited
+- `REGRESSED(delta=-0.02)` — this change hurt, revert it
+- `hit_time_budget` — training was cut short
+
+**Use the analysis to guide your next experiment.** For example: if you see OVERFITTING, try more dropout, label smoothing, or CutMix. If you see val_still_improving, try increasing max_epochs or reallocating time budget across stages.
 
 You can extract the key metric:
 
@@ -100,22 +116,26 @@ grep "^top1_val_acc:" run.log
 
 LOOP FOREVER:
 
-1. **Read** `artifacts/autoresearch_log.csv` to understand the current best accuracy and what has been tried.
-2. **Propose** one change with a hypothesis (e.g. "adding cosine annealing should help the later stages converge better").
+1. **Read** `artifacts/autoresearch_log.csv` to understand the current best accuracy, what has been tried, and what the **analysis** column says about each run.
+2. **Propose** one experiment. Use the `analysis` column to inform — but not constrain — your choice. The analysis flags symptoms (overfitting, plateau, time pressure); your job is to decide the best intervention, which may be a direct fix for the symptom OR a creative leap to something untried. Don't just iterate on the last failure — look at the full history for patterns and unexplored regions of the search space.
 3. **Edit** `train.py` -- make the change and update `NOTES` to describe it.
 4. **Run** `python train.py` and wait for it to complete.
-5. **Read** the output to see the result (check the `---` summary block or the last line of `artifacts/autoresearch_log.csv`).
+5. **Read** the output to see the result (check the `---` summary block or the last line of `artifacts/autoresearch_log.csv`). **Pay attention to the `analysis` field.**
 6. **Decide**: if `top1_val_acc` improved, keep the change. If it regressed, revert `train.py` to the previous version.
 7. **Repeat** from step 1.
 
 ### Guidelines
 
-- **One change at a time.** Changing multiple things makes it impossible to attribute improvement or regression.
+- **One hypothesis at a time.** You may change 2-3 tightly coupled parameters when needed to test a single training-dynamics idea, but do not bundle unrelated changes.
+- **Allowed coupled changes.** Examples: shorten a stage and raise that stage's LR to compensate; increase batch size and adjust LR accordingly; reallocate time across stages and retune only the affected stage LRs.
+- **Disallowed bundles.** Do not change optimizer, scheduler, dropout, augmentation, and stage structure all in one run.
 - **Keep NOTES concise and descriptive.** Good: `"adamw lr=3e-4, cosine schedule"`. Bad: `"trying something new"`.
+- **If you make a coupled change, say so in NOTES.** Example: `"shorter stage1 + higher stage1 lr"`.
 - **Read the log before every run.** The history tells you what has and hasn't worked.
 - **Don't waste budget on things already tried.** If dropout=0.6 already regressed, don't try it again.
-- **Think about the time budget.** With 30 minutes, you have room for all 3 stages and some extra depth, but not unlimited epochs. Optimise the stage structure for the budget.
-- **Low-hanging fruit first.** Try optimizer/LR/scheduler changes first, then explore the pre-staged advanced techniques (CutMix, GeM, LLRD, TTA, etc.) before writing entirely new code.
+- **Think about the time budget.** Optimise the stage structure for the budget. Deeper stages (layer2, layer1) need lower LRs (~1e-5) and fewer epochs — adding them is only worthwhile if there's enough budget left after layer3 converges.
+- **Balance exploitation and exploration.** Fix obvious problems flagged by the analysis, but also try bold moves — combine multiple techniques, try different backbones, or revisit a previously-discarded idea with different parameters. Don't get stuck in a local optimum by only making incremental tweaks.
+- **Use a polling interval of 90 seconds.** This is sufficinet and will be up to date enough without wasting tokens.
 
 ### Crashes
 

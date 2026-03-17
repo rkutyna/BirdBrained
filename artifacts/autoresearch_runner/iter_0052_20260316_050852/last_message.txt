@@ -1,0 +1,3 @@
+Tried one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): kept the best single-stage `layer3+layer4+head` setup and raised its LR from `9e-5` to `1e-4` (`NOTES = "skip layer4 stage + stage3 lr=1e-4"`). Hypothesis: the 7200s run was still improving at timeout, so a small LR bump could convert more of that budget into late-stage validation gain.
+
+Result: `top1_val_acc=0.911689`, `top1_test_acc=0.912739`, `training_seconds=7200.4`, `total_epochs=16`. That beats `0.908857` by `+0.002832`, and the last row in [artifacts/autoresearch_log_full555.csv](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log_full555.csv) logged `status=keep`. Decision: kept the change.

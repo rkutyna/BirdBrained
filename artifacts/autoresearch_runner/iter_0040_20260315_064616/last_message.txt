@@ -1,0 +1,3 @@
+Tested one throughput hypothesis in `train.py`: increased `NUM_WORKERS` from `4` to `8` and set `NOTES` to `NUM_WORKERS=8 for more stage3 throughput`. The run finished with `top1_val_acc=0.893924`, which did not beat the current best `0.900618` (`status=discard` in `artifacts/autoresearch_log_full555.csv`).
+
+Decision: reverted `train.py` to its pre-cycle contents. It is back to `NOTES = "NUM_WORKERS=4 for more stage3 throughput"` and `NUM_WORKERS = 4`.

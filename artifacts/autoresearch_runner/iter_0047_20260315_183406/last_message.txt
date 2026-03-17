@@ -1,0 +1,3 @@
+Read `artifacts/autoresearch_log_full555.csv` first; the best prior run was `0.906025` with `stage3 lr=7.5e-5 + cap=15`. I tested one hypothesis in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): cut the `layer4+head` stage from 3 epochs to 2 so full `layer3+layer4+head` fine-tuning starts earlier under the 7200s budget. `NOTES` is now `cap layer4 stage at 2 for 7200s`.
+
+`python train.py` finished with `top1_val_acc=0.907055`, `top1_test_acc=0.910270`, `total_epochs=17`, `training_seconds=7183.4`. The last log row in `artifacts/autoresearch_log_full555.csv` confirms `status=keep`; analysis was `mild_overfit(gap=0.070); val_still_improving; ... best_at_epoch_17/17`. Decision: keep, since it improved over `0.906025` by `+0.001030`.

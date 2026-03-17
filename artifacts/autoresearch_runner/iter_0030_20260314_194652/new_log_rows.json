@@ -1,0 +1,15 @@
+[
+  {
+    "analysis": "val_still_improving; hit_time_budget; flat(delta=-0.0095); train_acc=0.8799,val_acc=0.8581,best_at_epoch_9/9",
+    "notes": "enable EMA",
+    "peak_memory_mb": "673.1",
+    "run_id": "20260314_194919_bb855e",
+    "status": "keep",
+    "time_budget_sec": "3600",
+    "timestamp": "2026-03-14T20:52:02",
+    "top1_test_acc": "0.877238",
+    "top1_val_acc": "0.873069",
+    "total_epochs": "9",
+    "training_seconds": "3600.1"
+  }
+]

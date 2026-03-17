@@ -1,0 +1,15 @@
+[
+  {
+    "analysis": "REGRESSED(delta=-0.0120); train_acc=0.9800,val_acc=0.9391,best_at_epoch_17/19",
+    "notes": "enable focal loss gamma=1.5 | 1h replay",
+    "peak_memory_mb": "521.4",
+    "run_id": "20260314_031604_8cd66b",
+    "status": "discard",
+    "time_budget_sec": "3600",
+    "timestamp": "2026-03-14T03:50:38",
+    "top1_test_acc": "0.940672",
+    "top1_val_acc": "0.950257",
+    "total_epochs": "19",
+    "training_seconds": "2022.9"
+  }
+]

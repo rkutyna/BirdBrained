@@ -1,0 +1,5 @@
+Tried one budget-reallocation experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): moved 1 epoch from the `layer4` stage to the `layer2` stage (`layer4` 4→3, `layer2` 4→5) with `NOTES = "shift 1 epoch from layer4 to layer2"`.
+
+Result: `top1_val_acc = 0.957976`, which is below the current best `0.963122`. The run summary flagged `plateau(range=0.0026); hit_time_budget; REGRESSED(delta=-0.0103)`.
+
+Decision: reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents.

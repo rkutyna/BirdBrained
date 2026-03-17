@@ -1,0 +1,5 @@
+Tried one experiment: restored the 98-species `0.960549` baseline (`6/4/8` stages, `GeM + TTA`) and added a `layer2+layer3+layer4+head` stage at `lr=2e-5` with the new `2400s` budget.
+
+Result: `top1_val_acc = 0.960549`, `top1_test_acc = 0.942730`, `training_seconds = 2400.2`. It tied the best instead of beating it, with analysis `val_still_improving; hit_time_budget; flat(delta=-0.0026)`.
+
+Decision: revert. `train.py` was restored to its exact pre-cycle contents.

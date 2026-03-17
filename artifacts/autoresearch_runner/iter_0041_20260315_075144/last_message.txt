@@ -1,0 +1,5 @@
+I read `program.md` and `artifacts/autoresearch_log_full555.csv`, then ran one experiment: lowering `EMA_DECAY` from `0.999` to `0.997` in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) with `NOTES = "EMA decay=0.997 for faster stage3 tracking"`.
+
+The run finished at `top1_val_acc=0.891349` and `top1_test_acc=0.897098`, which did not beat the current best `0.900618`. The logged analysis was `hit_time_budget; REGRESSED(delta=-0.0255); train_acc=0.9120,val_acc=0.8702,best_at_epoch_7/8`.
+
+Because it regressed, I restored [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents. Keep/revert decision: `revert`.

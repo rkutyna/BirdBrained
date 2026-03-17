@@ -1,0 +1,3 @@
+I tried one experiment: reallocated one epoch from the `layer4+head` stage to the deeper `layer3+layer4+head` stage by changing the stage caps to `1` and `16` and updating `NOTES` in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py#L44), [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py#L65), and [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py#L71). The hypothesis was that the best 7200s run was still improving when the deep stage ended, so that epoch should be more valuable there than in the shallower stage.
+
+`python train.py` finished and logged `top1_val_acc=0.908342`, `top1_test_acc=0.907285`, `training_seconds=7200.2`, `total_epochs=16`. Since `0.908342 > 0.907055`, I kept the change.

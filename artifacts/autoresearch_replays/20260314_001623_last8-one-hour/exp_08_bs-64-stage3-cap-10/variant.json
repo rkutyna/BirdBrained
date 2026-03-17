@@ -1,0 +1,11 @@
+{
+  "name": "bs=64 + stage3 cap=10",
+  "nested_set": {
+    "STAGES[2].max_epochs": 10
+  },
+  "set": {
+    "BATCH_SIZE": 64,
+    "NOTES": "bs=64 + stage3 cap=10"
+  },
+  "source": "artifacts/autoresearch_runner/iter_0020_20260313_230919/train_before.py"
+}

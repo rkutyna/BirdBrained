@@ -1,0 +1,10 @@
+{
+  "name": "stage3 lr=1.5e-4 from 1e-4",
+  "nested_set": {
+    "STAGES[2].lr": 0.00015
+  },
+  "set": {
+    "NOTES": "stage3 lr=1.5e-4 from 1e-4"
+  },
+  "source": "artifacts/autoresearch_runner/iter_0017_20260313_212521/train_before.py"
+}

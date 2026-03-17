@@ -36,10 +36,18 @@ from nabirds_common import (
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-LABEL_NAMES_CSV = ARTIFACTS_DIR / "label_names.csv"
-SPLIT_FILE = DATA_ROOT / "train_test_split_8020_target_species.txt"
-
-CACHE_PKL = ARTIFACTS_DIR / "autoresearch_splits.pkl"
+SPECIES_CONFIGS = {
+    "subset98": {
+        "label_csv": ARTIFACTS_DIR / "label_names.csv",
+        "split_file": DATA_ROOT / "train_test_split_8020_target_species.txt",
+        "cache_pkl": ARTIFACTS_DIR / "autoresearch_splits.pkl",
+    },
+    "full555": {
+        "label_csv": ARTIFACTS_DIR / "label_names_nabirds_all_specific.csv",
+        "split_file": DATA_ROOT / "train_test_split_8020_all_specific.txt",
+        "cache_pkl": ARTIFACTS_DIR / "autoresearch_splits_full555.pkl",
+    },
+}
 
 VAL_FRACTION = 0.10
 
@@ -47,12 +55,12 @@ VAL_FRACTION = 0.10
 # ---------------------------------------------------------------------------
 # Build splits
 # ---------------------------------------------------------------------------
-def build_splits() -> dict:
+def build_splits(label_csv: Path, split_file: Path) -> dict:
     """Parse NABirds metadata and return {train_df, val_df, test_df, label_names}."""
     # --- Load metadata ---
     images = pd.read_csv(DATA_ROOT / "images.txt", sep=" ", names=["image_id", "image_rel_path"])
     labels = pd.read_csv(DATA_ROOT / "image_class_labels.txt", sep=" ", names=["image_id", "class_id"])
-    splits = pd.read_csv(SPLIT_FILE, sep=" ", names=["image_id", "is_train"])
+    splits = pd.read_csv(split_file, sep=" ", names=["image_id", "is_train"])
     bboxes = pd.read_csv(DATA_ROOT / "bounding_boxes.txt", sep=" ", names=["image_id", "x", "y", "w", "h"])
 
     class_rows = []
@@ -64,11 +72,11 @@ def build_splits() -> dict:
                 class_rows.append((int(cid), cname))
     classes = pd.DataFrame(class_rows, columns=["class_id", "class_name"])
 
-    # --- Load label names (98 target species) ---
-    label_df = pd.read_csv(LABEL_NAMES_CSV)
+    # --- Load label names ---
+    label_df = pd.read_csv(label_csv)
     label_names = label_df["species"].dropna().astype(str).tolist()
     num_classes = len(label_names)
-    print(f"  Label names: {num_classes} species from {LABEL_NAMES_CSV}")
+    print(f"  Label names: {num_classes} species from {label_csv}")
 
     # --- Map NABirds class_ids to our 0..97 targets ---
     valid_class_ids = set(labels["class_id"].unique())
@@ -113,7 +121,7 @@ def build_splits() -> dict:
 # ---------------------------------------------------------------------------
 # Verification
 # ---------------------------------------------------------------------------
-def verify_dataset() -> bool:
+def verify_dataset(label_csv: Path, split_file: Path) -> bool:
     """Check that the NABirds dataset and required files are present."""
     ok = True
     checks = [
@@ -123,8 +131,8 @@ def verify_dataset() -> bool:
         (DATA_ROOT / "image_class_labels.txt", "image_class_labels.txt"),
         (DATA_ROOT / "bounding_boxes.txt", "bounding_boxes.txt"),
         (DATA_ROOT / "classes.txt", "classes.txt"),
-        (SPLIT_FILE, "Train/test split file"),
-        (LABEL_NAMES_CSV, "Label names CSV"),
+        (split_file, "Train/test split file"),
+        (label_csv, "Label names CSV"),
     ]
     for path, desc in checks:
         if path.exists():
@@ -157,38 +165,49 @@ def verify_sample_images(train_df: pd.DataFrame, n: int = 5) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="One-time setup for autoresearch.")
     parser.add_argument("--force", action="store_true", help="Re-build cache even if it exists")
+    parser.add_argument(
+        "--species",
+        choices=list(SPECIES_CONFIGS),
+        default="subset98",
+        help="Species mode: subset98 (98 target species) or full555 (all NABirds species)",
+    )
     args = parser.parse_args()
 
+    cfg = SPECIES_CONFIGS[args.species]
+    label_csv = cfg["label_csv"]
+    split_file = cfg["split_file"]
+    cache_pkl = cfg["cache_pkl"]
+
     print("=" * 60)
-    print("AUTORESEARCH — prepare.py")
+    print(f"AUTORESEARCH — prepare.py  [species={args.species}]")
     print("=" * 60)
 
     # Step 1: Verify dataset
     print("\n[1/4] Verifying NABirds dataset...")
-    if not verify_dataset():
+    if not verify_dataset(label_csv, split_file):
         print("\nERROR: Missing required files. Cannot continue.")
         sys.exit(1)
 
     # Step 2: Check if cache already exists
-    if CACHE_PKL.exists() and not args.force:
-        print(f"\n[2/4] Cache already exists: {CACHE_PKL}")
+    if cache_pkl.exists() and not args.force:
+        print(f"\n[2/4] Cache already exists: {cache_pkl}")
         print("  Use --force to rebuild. Loading to verify...")
-        with open(CACHE_PKL, "rb") as f:
+        with open(cache_pkl, "rb") as f:
             data = pickle.load(f)
         print(f"  Train: {len(data['train_df']):,} | Val: {len(data['val_df']):,} | Test: {len(data['test_df']):,}")
         print(f"  Classes: {len(data['label_names'])}")
     else:
         # Step 2: Build splits
         print("\n[2/4] Building train/val/test splits...")
-        data = build_splits()
+        data = build_splits(label_csv, split_file)
         print(f"  Train: {len(data['train_df']):,} | Val: {len(data['val_df']):,} | Test: {len(data['test_df']):,}")
         print(f"  Classes: {len(data['label_names'])}")
 
         # Save cache
         ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(CACHE_PKL, "wb") as f:
+        with open(cache_pkl, "wb") as f:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-        print(f"  Saved to {CACHE_PKL}")
+        print(f"  Saved to {cache_pkl}")
 
     # Step 3: Verify sample images
     print("\n[3/4] Spot-checking sample images...")
@@ -196,16 +215,17 @@ def main():
 
     # Step 4: Confirm label file
     print("\n[4/4] Confirming label file...")
-    label_df = pd.read_csv(LABEL_NAMES_CSV)
+    label_df = pd.read_csv(label_csv)
     species = label_df["species"].dropna().tolist()
-    print(f"  [OK] {LABEL_NAMES_CSV}: {len(species)} species")
+    print(f"  [OK] {label_csv}: {len(species)} species")
     print(f"  First 5: {species[:5]}")
     print(f"  Last 5:  {species[-5:]}")
 
     # Summary
     print("\n" + "=" * 60)
     print("SETUP COMPLETE — ready for autoresearch experiments")
-    print(f"  Cache: {CACHE_PKL}")
+    print(f"  Species: {args.species}")
+    print(f"  Cache: {cache_pkl}")
     print(f"  Run:   python train.py")
     print("=" * 60)
 

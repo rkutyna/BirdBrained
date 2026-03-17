@@ -1,0 +1,10 @@
+{
+  "name": "cap stage2 at 4 to extend stage3",
+  "nested_set": {
+    "STAGES[1].max_epochs": 4
+  },
+  "set": {
+    "NOTES": "cap stage2 at 4 to extend stage3"
+  },
+  "source": "artifacts/autoresearch_runner/iter_0015_20260313_201754/train_before.py"
+}

@@ -1,0 +1,5 @@
+Tried one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): reduced the `layer2` stage from 4 to 3 epochs and added a final `layer1+layer2+layer3+layer4+head` stage for 1 epoch at `lr=1e-5` (`NOTES = "layer2 cap=3 + add layer1 lr=1e-5"`). Hypothesis: swapping one late `layer2` epoch for a very low-LR `layer1` fine-tune would improve `top1_val_acc`.
+
+Result from `python train.py`: `top1_val_acc=0.962264`, `top1_test_acc=0.946159`, `training_seconds=2400.2`, with `analysis=hit_time_budget; flat(delta=-0.0051); ...`. The added `layer1` stage was reached, but timed out mid-epoch and did not beat `0.963122`.
+
+Decision: revert. [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) has been restored to its pre-cycle contents, and the discard row was appended to [artifacts/autoresearch_log.csv](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log.csv).

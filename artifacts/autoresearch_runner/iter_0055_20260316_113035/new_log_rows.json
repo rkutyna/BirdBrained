@@ -1,0 +1,15 @@
+[
+  {
+    "analysis": "val_still_improving; hit_time_budget; REGRESSED(delta=-0.0124); train_acc=0.9300,val_acc=0.9068,best_at_epoch_15/15",
+    "notes": "step decay at epoch 10 on TrivialAugment single-stage",
+    "peak_memory_mb": "605.3",
+    "run_id": "20260316_113428_d802ed",
+    "status": "discard",
+    "time_budget_sec": "7200",
+    "timestamp": "2026-03-16T13:37:17",
+    "top1_test_acc": "0.924264",
+    "top1_val_acc": "0.917611",
+    "total_epochs": "15",
+    "training_seconds": "7200.4"
+  }
+]

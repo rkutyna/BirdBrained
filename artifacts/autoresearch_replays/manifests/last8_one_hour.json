@@ -1,0 +1,76 @@
+{
+  "name": "last8-one-hour",
+  "description": "Replay the last 8 autoresearch experiments at a 1-hour budget using saved train.py snapshots and explicit config overrides.",
+  "variants": [
+    {
+      "name": "enable CutMix",
+      "source": "artifacts/autoresearch_runner/iter_0013_20260313_190934/train_before.py",
+      "set": {
+        "CUTMIX_ALPHA": 1.0,
+        "NOTES": "enable CutMix"
+      }
+    },
+    {
+      "name": "cap stage2 at 5 to extend stage3",
+      "source": "artifacts/autoresearch_runner/iter_0014_20260313_194252/train_after.py"
+    },
+    {
+      "name": "cap stage2 at 4 to extend stage3",
+      "source": "artifacts/autoresearch_runner/iter_0015_20260313_201754/train_before.py",
+      "set": {
+        "NOTES": "cap stage2 at 4 to extend stage3"
+      },
+      "nested_set": {
+        "STAGES[1].max_epochs": 4
+      }
+    },
+    {
+      "name": "cap stage1 at 5 to extend stage3",
+      "source": "artifacts/autoresearch_runner/iter_0016_20260313_205238/train_before.py",
+      "set": {
+        "NOTES": "cap stage1 at 5 to extend stage3"
+      },
+      "nested_set": {
+        "STAGES[0].max_epochs": 5
+      }
+    },
+    {
+      "name": "stage3 lr=1.5e-4 from 1e-4",
+      "source": "artifacts/autoresearch_runner/iter_0017_20260313_212521/train_before.py",
+      "set": {
+        "NOTES": "stage3 lr=1.5e-4 from 1e-4"
+      },
+      "nested_set": {
+        "STAGES[2].lr": 0.00015
+      }
+    },
+    {
+      "name": "enable focal loss gamma=1.5",
+      "source": "artifacts/autoresearch_runner/iter_0018_20260313_215905/train_before.py",
+      "set": {
+        "USE_FOCAL_LOSS": true,
+        "FOCAL_GAMMA": 1.5,
+        "NOTES": "enable focal loss gamma=1.5"
+      }
+    },
+    {
+      "name": "per-stage cosine schedule on best stage caps",
+      "source": "artifacts/autoresearch_runner/iter_0019_20260313_223559/train_before.py",
+      "set": {
+        "SCHEDULER": "cosine",
+        "NOTES": "per-stage cosine schedule on best stage caps"
+      }
+    },
+    {
+      "name": "bs=64 + stage3 cap=10",
+      "source": "artifacts/autoresearch_runner/iter_0020_20260313_230919/train_before.py",
+      "set": {
+        "BATCH_SIZE": 64,
+        "NOTES": "bs=64 + stage3 cap=10"
+      },
+      "nested_set": {
+        "STAGES[2].max_epochs": 10
+      }
+    }
+  ]
+}

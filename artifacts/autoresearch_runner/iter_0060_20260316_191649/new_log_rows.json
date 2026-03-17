@@ -1,0 +1,15 @@
+[
+  {
+    "analysis": "hit_time_budget; flat(delta=-0.0051); train_acc=0.9901,val_acc=0.9563,best_at_epoch_17/19",
+    "notes": "swap last layer2 epoch for 1ep layer1 lr=5e-6",
+    "peak_memory_mb": "538.7",
+    "run_id": "20260316_191848_457036",
+    "status": "discard",
+    "time_budget_sec": "2400",
+    "timestamp": "2026-03-16T19:59:45",
+    "top1_test_acc": "0.946159",
+    "top1_val_acc": "0.962264",
+    "total_epochs": "19",
+    "training_seconds": "2401.3"
+  }
+]

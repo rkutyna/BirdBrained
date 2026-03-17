@@ -1,0 +1,3 @@
+I read the history in [`artifacts/autoresearch_log_full555.csv`](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log_full555.csv) first, saw the incumbent best was `0.893666`, and ran one experiment in [`train.py`](/Users/rkutyna/Documents/GitHub/capstone/train.py): shorten the `layer4+head` stage from 4 to 3 epochs while keeping the successful skip-stage1 setup, to move into `layer3+layer4+head` earlier.
+
+The run finished with `top1_val_acc=0.888002` and `top1_test_acc=0.895555`, with analysis `val_still_improving; hit_time_budget; REGRESSED(delta=-0.0252)`. Because it did not beat `0.893666`, I reverted [`train.py`](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents.

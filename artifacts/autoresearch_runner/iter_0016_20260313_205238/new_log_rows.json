@@ -1,0 +1,15 @@
+[
+  {
+    "analysis": "val_still_improving; plateau(range=0.0017); hit_time_budget; REGRESSED(delta=-0.0129); train_acc=0.9763,val_acc=0.9434,best_at_epoch_15/15",
+    "notes": "cap stage1 at 5 to extend stage3",
+    "peak_memory_mb": "553.4",
+    "run_id": "20260313_205337_9e0529",
+    "status": "discard",
+    "time_budget_sec": "1800",
+    "timestamp": "2026-03-13T21:24:29",
+    "top1_test_acc": "0.938957",
+    "top1_val_acc": "0.947684",
+    "total_epochs": "15",
+    "training_seconds": "1800.3"
+  }
+]

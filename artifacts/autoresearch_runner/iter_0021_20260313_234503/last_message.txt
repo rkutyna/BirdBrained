@@ -1,0 +1,5 @@
+Tried one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): lowered the stage 3 LR from `1e-4` to `8e-5` while keeping the current best stage caps.
+
+Result: `top1_val_acc=0.953688`, `top1_test_acc=0.941015`. The logged analysis was `val_still_improving; hit_time_budget; flat(delta=-0.0051); train_acc=0.9793,val_acc=0.9511,best_at_epoch_16/17`.
+
+Because `0.953688` did not improve over `0.956261`, I reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents.

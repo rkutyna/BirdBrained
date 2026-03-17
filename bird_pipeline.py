@@ -375,6 +375,20 @@ def classifier_transform() -> transforms.Compose:
     )
 
 
+class _GeM(nn.Module):
+    """Generalized Mean pooling — matches the GeM class in train.py."""
+    def __init__(self, p: float = 3.0, eps: float = 1e-6):
+        super().__init__()
+        self.p = nn.Parameter(torch.ones(1) * p)
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.avg_pool2d(
+            x.clamp(min=self.eps).pow(self.p),
+            (x.size(-2), x.size(-1)),
+        ).pow(1.0 / self.p)
+
+
 def _build_fc_head(state_dict: dict, in_features: int, num_classes: int) -> nn.Module:
     """Build the fc head matching the format the checkpoint was saved with."""
     if "fc.weight" in state_dict:
@@ -409,6 +423,9 @@ def load_classifier(
         )
 
     model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+    # Detect GeM pooling from autoresearch checkpoints (avgpool.p parameter)
+    if "avgpool.p" in state_dict:
+        model.avgpool = _GeM(p=float(state_dict["avgpool.p"].item()))
     model.fc = _build_fc_head(state_dict, model.fc.in_features, num_classes)
     model.load_state_dict(state_dict)
     model.eval().to(device)

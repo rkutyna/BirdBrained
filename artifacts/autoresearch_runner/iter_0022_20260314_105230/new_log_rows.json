@@ -1,0 +1,15 @@
+[
+  {
+    "analysis": "val_still_improving; hit_time_budget; train_acc=0.7414,val_acc=0.7933,best_at_epoch_11/11",
+    "notes": "LLRD decay=0.8",
+    "peak_memory_mb": "602.9",
+    "run_id": "20260314_105419_624982",
+    "status": "keep",
+    "time_budget_sec": "3600",
+    "timestamp": "2026-03-14T11:57:07",
+    "top1_test_acc": "0.808705",
+    "top1_val_acc": "0.796859",
+    "total_epochs": "11",
+    "training_seconds": "3600.1"
+  }
+]

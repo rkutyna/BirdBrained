@@ -1,0 +1,14 @@
+[
+  {
+    "notes": "enable EMA",
+    "peak_memory_mb": "644.6",
+    "run_id": "20260313_175613_bfad8d",
+    "status": "discard",
+    "time_budget_sec": "1800",
+    "timestamp": "2026-03-13T18:27:09",
+    "top1_test_acc": "0.906379",
+    "top1_val_acc": "0.929674",
+    "total_epochs": "16",
+    "training_seconds": "1800.2"
+  }
+]

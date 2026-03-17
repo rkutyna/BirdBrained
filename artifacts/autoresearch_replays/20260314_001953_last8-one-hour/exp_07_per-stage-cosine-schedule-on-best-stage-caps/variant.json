@@ -1,0 +1,8 @@
+{
+  "name": "per-stage cosine schedule on best stage caps",
+  "set": {
+    "NOTES": "per-stage cosine schedule on best stage caps",
+    "SCHEDULER": "cosine"
+  },
+  "source": "artifacts/autoresearch_runner/iter_0019_20260313_223559/train_before.py"
+}

@@ -1,0 +1,3 @@
+Tried one experiment: enabled mild CutMix on the current best 7200s single-stage setup by setting `CUTMIX_ALPHA=0.5` and updating `NOTES` accordingly.
+
+Result: `top1_val_acc=0.904737`, `top1_test_acc=0.908212`, `training_seconds=7200.2`, `total_epochs=16`. The run stayed `val_still_improving` but did not beat `0.908857`, so I reverted `train.py` to its pre-cycle contents. The result was logged to `artifacts/autoresearch_log_full555.csv`. After the summary was printed, the process hung during DataLoader worker shutdown; I terminated that idle process after the log entry was already written.

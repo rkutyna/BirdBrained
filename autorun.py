@@ -37,6 +37,7 @@ RUNNER_DIR = ROOT / "artifacts" / "autoresearch_runner"
 PROMPT_TEMPLATE = ROOT / "prompts" / "autoresearch_codex_prompt.txt"
 HISTORY_JSONL = RUNNER_DIR / "history.jsonl"
 RUNNER_LOG = RUNNER_DIR / "runner.log"
+STATUS_FILE = ROOT / "artifacts" / "autoresearch_status.json"
 
 
 @dataclass
@@ -165,6 +166,45 @@ def load_extra_instructions(path: Path | None) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+CROSS_REF_LOGS = {
+    "subset98": ROOT / "artifacts" / "autoresearch_log.csv",
+    "full555": ROOT / "artifacts" / "autoresearch_log_full555.csv",
+}
+
+
+def build_cross_reference(current_species: str | None) -> str:
+    """Build a summary of the OTHER species mode's experiment log for inspiration."""
+    if current_species is None:
+        current_species = "subset98"
+    other = "full555" if current_species == "subset98" else "subset98"
+    other_log = CROSS_REF_LOGS[other]
+    rows = read_rows(other_log)
+    if not rows:
+        return f"No experiments logged yet for {other} mode."
+
+    # Show a compact summary: best result + last 5 experiments with notes
+    best_row = max(rows, key=lambda r: float(r.get("top1_val_acc") or 0))
+    best_val = float(best_row.get("top1_val_acc") or 0)
+    best_notes = best_row.get("notes", "")
+
+    lines = [
+        f"The {other} dataset ({len(rows)} experiments, best val_acc={best_val:.4f}) "
+        f"has been tested with these techniques. Use for inspiration — results may "
+        f"not directly correlate between dataset sizes.",
+        "",
+        f"Best experiment: val_acc={best_val:.4f} — {best_notes}",
+        "",
+        "Recent experiments (status | val_acc | notes):",
+    ]
+    for row in rows[-8:]:
+        val = float(row.get("top1_val_acc") or 0)
+        status = row.get("status", "?")
+        notes = row.get("notes", "")
+        lines.append(f"  {status:>7} | {val:.4f} | {notes}")
+
+    return "\n".join(lines)
+
+
 def build_prompt(
     *,
     template: str,
@@ -172,6 +212,8 @@ def build_prompt(
     best_before: float,
     log_rows_before: int,
     extra_instructions: str,
+    species: str | None = None,
+    user_message: str | None = None,
 ) -> str:
     return template.format(
         iteration=iteration,
@@ -182,6 +224,8 @@ def build_prompt(
         program_md=str(PROGRAM_MD.relative_to(ROOT)),
         train_py=str(TRAIN_PY.relative_to(ROOT)),
         extra_instructions=extra_instructions or "(none)",
+        cross_reference_log=build_cross_reference(species),
+        user_message=user_message or "(none)",
     )
 
 
@@ -190,7 +234,74 @@ def append_history(result: IterationResult) -> None:
         f.write(json.dumps(result.__dict__, sort_keys=True) + "\n")
 
 
-def run_codex(prompt: str, iter_dir: Path, args: argparse.Namespace) -> int:
+# ---------------------------------------------------------------------------
+# Inject CLI overrides into train.py config
+# ---------------------------------------------------------------------------
+def apply_train_overrides(args: argparse.Namespace) -> None:
+    """Set SPECIES_MODE and TIME_BUDGET_SEC in train.py from CLI flags."""
+    import re as _re
+    if args.species is None and args.time_budget is None:
+        return
+    text = TRAIN_PY.read_text(encoding="utf-8")
+    if args.species is not None:
+        text = _re.sub(
+            r'^(SPECIES_MODE\s*=\s*).*$',
+            f'\\g<1>"{args.species}"  # set by autorun.py --species',
+            text,
+            count=1,
+            flags=_re.MULTILINE,
+        )
+        log_event(f"Set SPECIES_MODE = {args.species!r} in train.py")
+    if args.time_budget is not None:
+        text = _re.sub(
+            r'^(TIME_BUDGET_SEC\s*=\s*).*$',
+            f'\\g<1>{args.time_budget}  # set by autorun.py --time-budget',
+            text,
+            count=1,
+            flags=_re.MULTILINE,
+        )
+        log_event(f"Set TIME_BUDGET_SEC = {args.time_budget} in train.py")
+    TRAIN_PY.write_text(text, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Status file — written by autorun.py so monitor.py can poll it
+# ---------------------------------------------------------------------------
+def write_status(
+    iteration: int,
+    state: str,
+    best_before: float,
+    iter_started: float,
+    total_iterations: int | None = None,
+) -> None:
+    """Write a status JSON that monitor.py can poll."""
+    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATUS_FILE.write_text(
+        json.dumps({
+            "iteration": iteration,
+            "state": state,
+            "best_before": round(best_before, 6),
+            "iter_started_ts": round(iter_started, 1),
+            "total_iterations": total_iterations,
+            "updated_ts": round(time.time(), 1),
+        }),
+        encoding="utf-8",
+    )
+
+
+def clear_status() -> None:
+    if STATUS_FILE.exists():
+        STATUS_FILE.unlink()
+
+
+def run_codex(
+    prompt: str,
+    iter_dir: Path,
+    args: argparse.Namespace,
+    *,
+    iteration: int = 0,
+    best_before: float = 0.0,
+) -> int:
     cmd = [
         "codex",
         "exec",
@@ -239,7 +350,8 @@ def run_codex(prompt: str, iter_dir: Path, args: argparse.Namespace) -> int:
         sel.register(proc.stderr, selectors.EVENT_READ, ("stderr", stderr_f))
 
         while sel.get_map():
-            for key, _ in sel.select():
+            events = sel.select()
+            for key, _ in events:
                 stream_name, file_handle = key.data
                 line = key.fileobj.readline()
                 if line == "":
@@ -287,6 +399,8 @@ def run_iteration(
         best_before=best_before,
         log_rows_before=log_rows_before,
         extra_instructions=extra_instructions,
+        species=args.species,
+        user_message=args.user_message,
     )
     write_iteration_artifacts(iter_dir, prompt, train_before)
 
@@ -318,7 +432,10 @@ def run_iteration(
             dry_run=True,
         )
 
-    exit_code = run_codex(prompt, iter_dir, args)
+    iter_started = time.time()
+    write_status(iteration, "training", best_before, iter_started, getattr(args, "iterations", None))
+    exit_code = run_codex(prompt, iter_dir, args, iteration=iteration, best_before=best_before)
+    write_status(iteration, "evaluating", best_before, iter_started, getattr(args, "iterations", None))
     after_rows = read_rows(AUTORESEARCH_LOG)
     best_after = best_metric(after_rows)
     last_after = last_metric(after_rows)
@@ -479,6 +596,24 @@ def parse_args() -> argparse.Namespace:
         help="Build prompts and iteration directories without invoking Codex.",
     )
     p.add_argument(
+        "--species",
+        choices=["subset98", "full555"],
+        default=None,
+        help="Species mode. Sets SPECIES_MODE in train.py before each run.",
+    )
+    p.add_argument(
+        "--time-budget",
+        type=int,
+        default=None,
+        help="Training time budget in seconds. Sets TIME_BUDGET_SEC in train.py.",
+    )
+    p.add_argument(
+        "--user-message",
+        type=str,
+        default=None,
+        help="A note or direction for the agent (e.g. 'revisit timed-out runs with larger budget').",
+    )
+    p.add_argument(
         "--tag",
         default=None,
         help=(
@@ -501,6 +636,11 @@ def main() -> int:
         log_event(f"Missing {TRAIN_PY}")
         return 2
     ensure_layout()
+    apply_train_overrides(args)
+    # Update log CSV path if using full555 mode
+    global AUTORESEARCH_LOG
+    if args.species == "full555":
+        AUTORESEARCH_LOG = ROOT / "artifacts" / "autoresearch_log_full555.csv"
     if args.tag:
         git_ensure_branch(args.tag)
     template = load_template(args.prompt_template)
@@ -513,6 +653,7 @@ def main() -> int:
         "Runner starting with "
         f"iterations={args.iterations} hours={args.hours} patience={args.patience} "
         f"cooldown_seconds={args.cooldown_seconds} danger_full_access={args.danger_full_access} "
+        f"species={args.species} time_budget={args.time_budget} "
         f"dry_run={args.dry_run}"
     )
 

@@ -1,0 +1,5 @@
+Tried one experiment: raised stage 3 LR from `1e-4` to `1.5e-4` with `NOTES="stage3 lr=1.5e-4"`.
+
+Result: `top1_val_acc=0.889032`, `top1_test_acc=0.892159`, `total_epochs=8`, analysis `hit_time_budget; REGRESSED(delta=-0.0376)`. That did not beat `0.893666`.
+
+Decision: revert. [`train.py`](/Users/rkutyna/Documents/GitHub/capstone/train.py) has been restored to its pre-cycle contents, and the discard run is logged in [`artifacts/autoresearch_log_full555.csv`](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log_full555.csv).

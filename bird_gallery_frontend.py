@@ -326,20 +326,31 @@ def choose_best_checkpoint(
     checkpoints: Iterable[str],
     run_summary_csv: Path = Path("artifacts/logs/run_summary.csv"),
 ) -> str:
+    """Pick the best checkpoint by comparing metrics across both CSVs.
+
+    Compares the best accuracy from autoresearch_log.csv against the best
+    from run_summary.csv and returns whichever checkpoint scores higher.
+    Falls back to stage-based filename ranking if neither CSV is available.
+    """
     ckpts = list(checkpoints)
     if not ckpts:
         raise ValueError("No checkpoints provided.")
 
-    autoresearch_best = next(
+    # --- Candidate 1: autoresearch_best.pt (from autoresearch_log.csv) ---
+    autoresearch_ckpt = next(
         (ckpt for ckpt in ckpts if Path(ckpt).name == AUTORESEARCH_BEST_CKPT.name),
         None,
     )
-    if (
-        autoresearch_best is not None
-        and _autoresearch_best_metrics(autoresearch_best) is not None
-        and (_autoresearch_checkpoint_sanity(autoresearch_best, DEFAULT_LABEL_NAMES_CSV) or {}).get("sane", False)
-    ):
-        return autoresearch_best
+    autoresearch_acc: float | None = None
+    if autoresearch_ckpt is not None:
+        auto_metrics = _autoresearch_best_metrics(autoresearch_ckpt)
+        if auto_metrics is not None:
+            # Use val_acc as the primary metric (what autoresearch optimizes)
+            autoresearch_acc = auto_metrics.get("val_acc")
+
+    # --- Candidate 2: best from run_summary.csv ---
+    summary_ckpt: str | None = None
+    summary_acc: float | None = None
 
     checkpoint_by_key: dict[str, str] = {}
     for ckpt in ckpts:
@@ -357,9 +368,24 @@ def choose_best_checkpoint(
                 for _, row in valid_df.iterrows():
                     for key in _path_keys(str(row["checkpoint_path"])):
                         if key in checkpoint_by_key:
-                            return checkpoint_by_key[key]
+                            summary_ckpt = checkpoint_by_key[key]
+                            summary_acc = float(row["test_acc"])
+                            break
+                    if summary_ckpt is not None:
+                        break
         except Exception:
             pass
+
+    # --- Compare and pick the best ---
+    if autoresearch_acc is not None and summary_acc is not None:
+        if autoresearch_acc >= summary_acc:
+            return autoresearch_ckpt
+        else:
+            return summary_ckpt
+    elif autoresearch_acc is not None:
+        return autoresearch_ckpt
+    elif summary_ckpt is not None:
+        return summary_ckpt
 
     # Fallback: prefer stage3 > stage2 > stage1 by filename
     return max(ckpts, key=_checkpoint_stage_rank)

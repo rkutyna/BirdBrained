@@ -1,0 +1,15 @@
+[
+  {
+    "analysis": "val_still_improving; plateau(range=0.0049); hit_time_budget; REGRESSED(delta=-0.0283); train_acc=0.9209,val_acc=0.8723,best_at_epoch_9/9",
+    "notes": "NUM_WORKERS=8 for more stage3 throughput",
+    "peak_memory_mb": "669.3",
+    "run_id": "20260315_064756_4093de",
+    "status": "discard",
+    "time_budget_sec": "3600",
+    "timestamp": "2026-03-15T07:50:41",
+    "top1_test_acc": "0.901935",
+    "top1_val_acc": "0.893924",
+    "total_epochs": "9",
+    "training_seconds": "3600.1"
+  }
+]
