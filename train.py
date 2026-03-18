@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 14400  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "TrivialAugment+EMA add layer2 stage lr=2e-5"
+NOTES = "shift 4 epochs from stage3 to layer2"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -71,13 +71,13 @@ STAGES = [
         "name": "layer3+layer4+head",
         "unfreeze": ("layer3.", "layer4.", "fc."),
         "lr": 1e-4,
-        "max_epochs": 20,
+        "max_epochs": 16,
     },
     {
         "name": "layer2+layer3+layer4+head",
         "unfreeze": ("layer2.", "layer3.", "layer4.", "fc."),
         "lr": 2e-5,
-        "max_epochs": 12,
+        "max_epochs": 16,
     },
 ]
 
