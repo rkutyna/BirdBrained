@@ -1,0 +1,5 @@
+Tried one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): restored the kept `full555` `TrivialAugment + EMA` baseline, ran `layer3+layer4+head` for 20 epochs, then added a late `layer2+layer3+layer4+head` stage at `lr=2e-5` for the 4-hour budget.
+
+Result: `top1_val_acc=0.931256`, `top1_test_acc=0.932599`, `training_seconds=14400.5`, `total_epochs=29`. This beat the previous best `0.919156` by `+0.012100`. Final analysis was `plateau(range=0.0046); hit_time_budget; improved(delta=+0.0077); train_acc=0.9629,val_acc=0.9222,best_at_epoch_28/29`.
+
+Decision: keep. I left the changes in `train.py` and did not revert.

@@ -53,6 +53,8 @@ COLOR_MAP = {
 
 AUTORESEARCH_LOG_CSV = Path("artifacts/autoresearch_log.csv")
 AUTORESEARCH_BEST_CKPT = Path("artifacts/autoresearch_best.pt")
+AUTORESEARCH_LOG_CSV_FULL555 = Path("artifacts/autoresearch_log_full555.csv")
+AUTORESEARCH_BEST_CKPT_FULL555 = Path("artifacts/autoresearch_best_full555.pt")
 
 
 def confidence_badge(conf: float | None, color_name: str | None) -> str:
@@ -221,9 +223,14 @@ def _autoresearch_best_metrics(
     checkpoint_path: str,
     autoresearch_log_csv: Path = AUTORESEARCH_LOG_CSV,
 ) -> dict[str, float | str] | None:
-    if Path(checkpoint_path).name != AUTORESEARCH_BEST_CKPT.name:
+    ckpt_name = Path(checkpoint_path).name
+    if ckpt_name == AUTORESEARCH_BEST_CKPT_FULL555.name:
+        log_csv = AUTORESEARCH_LOG_CSV_FULL555
+    elif ckpt_name == AUTORESEARCH_BEST_CKPT.name:
+        log_csv = autoresearch_log_csv
+    else:
         return None
-    df = _load_autoresearch_log(autoresearch_log_csv)
+    df = _load_autoresearch_log(log_csv)
     if df is None or df.empty:
         return None
     best_idx = df["top1_val_acc"].idxmax()
@@ -242,10 +249,13 @@ def _autoresearch_checkpoint_sanity(
     label_names_csv: str,
     sample_size: int = 32,
 ) -> dict[str, float | str | bool] | None:
-    if Path(checkpoint_path).name != AUTORESEARCH_BEST_CKPT.name:
+    ckpt_name = Path(checkpoint_path).name
+    if ckpt_name == AUTORESEARCH_BEST_CKPT_FULL555.name:
+        cache_path = Path("artifacts/autoresearch_splits_full555.pkl")
+    elif ckpt_name == AUTORESEARCH_BEST_CKPT.name:
+        cache_path = Path("artifacts/autoresearch_splits.pkl")
+    else:
         return None
-
-    cache_path = Path("artifacts/autoresearch_splits.pkl")
     if not cache_path.exists():
         return None
 
@@ -316,9 +326,11 @@ def _checkpoint_metrics(
 
 def _filter_checkpoints_by_mode(checkpoints: list[str], all_specific: bool) -> list[str]:
     if all_specific:
-        filtered = [c for c in checkpoints if "all_specific" in Path(c).name]
+        filtered = [c for c in checkpoints if "all_specific" in Path(c).name
+                    or Path(c).name == AUTORESEARCH_BEST_CKPT_FULL555.name]
     else:
-        filtered = [c for c in checkpoints if "all_specific" not in Path(c).name]
+        filtered = [c for c in checkpoints if "all_specific" not in Path(c).name
+                    and Path(c).name != AUTORESEARCH_BEST_CKPT_FULL555.name]
     return filtered if filtered else checkpoints
 
 
@@ -336,9 +348,10 @@ def choose_best_checkpoint(
     if not ckpts:
         raise ValueError("No checkpoints provided.")
 
-    # --- Candidate 1: autoresearch_best.pt (from autoresearch_log.csv) ---
+    # --- Candidate 1: autoresearch best (from autoresearch_log csvs) ---
+    _autoresearch_names = {AUTORESEARCH_BEST_CKPT.name, AUTORESEARCH_BEST_CKPT_FULL555.name}
     autoresearch_ckpt = next(
-        (ckpt for ckpt in ckpts if Path(ckpt).name == AUTORESEARCH_BEST_CKPT.name),
+        (ckpt for ckpt in ckpts if Path(ckpt).name in _autoresearch_names),
         None,
     )
     autoresearch_acc: float | None = None
