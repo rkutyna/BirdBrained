@@ -41,7 +41,7 @@ from torchvision import models, transforms
 TIME_BUDGET_SEC = 14400  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "shift 4 epochs from stage3 to layer2"
+NOTES = "bs=64 + stage lrs 1.5e-4/3e-5 for 166k set"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -51,7 +51,7 @@ DROPOUT = 0.4
 SPECIES_MODE = "base_combined"  # set by autorun.py --species
 
 # --- Data ---
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 NUM_WORKERS = 4
 
 # --- Training stages ---
@@ -70,13 +70,13 @@ STAGES = [
     {
         "name": "layer3+layer4+head",
         "unfreeze": ("layer3.", "layer4.", "fc."),
-        "lr": 1e-4,
+        "lr": 1.5e-4,
         "max_epochs": 16,
     },
     {
         "name": "layer2+layer3+layer4+head",
         "unfreeze": ("layer2.", "layer3.", "layer4.", "fc."),
-        "lr": 2e-5,
+        "lr": 3e-5,
         "max_epochs": 16,
     },
 ]
