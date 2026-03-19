@@ -2,7 +2,7 @@
 Evaluate checkpoints that are missing from artifacts/logs/run_summary.csv
 and append results in the same format.
 
-Run with:  python eval_missing_checkpoints.py
+Run with:  python tools/eval_missing_checkpoints.py
 """
 from __future__ import annotations
 
@@ -30,8 +30,9 @@ SUMMARY_CSV = Path("artifacts/logs/run_summary.csv")
 DATA_ROOT = Path("NABirds Dataset/nabirds")
 IMAGES_DIR = DATA_ROOT / "images"
 
-LABEL_NAMES_98 = ARTIFACTS_DIR / "label_names.csv"
-LABEL_NAMES_555 = ARTIFACTS_DIR / "label_names_nabirds_all_specific.csv"
+LABELS_DIR = ARTIFACTS_DIR / "labels"
+LABEL_NAMES_98 = LABELS_DIR / "label_names.csv"
+LABEL_NAMES_555 = LABELS_DIR / "label_names_nabirds_all_specific.csv"
 
 SPLIT_80_20_TARGET = DATA_ROOT / "train_test_split_8020_target_species.txt"
 SPLIT_80_20_ALL = DATA_ROOT / "train_test_split_8020_all_specific.txt"
@@ -257,8 +258,8 @@ def main():
         logged_paths.add(str(p))
         logged_paths.add(Path(p).name)
 
-    # Find all .pt files in artifacts/
-    all_ckpts = sorted(ARTIFACTS_DIR.glob("*.pt"))
+    # Find all .pt files in artifacts/resnet50/
+    all_ckpts = sorted((ARTIFACTS_DIR / "resnet50").rglob("*.pt"))
     missing = [c for c in all_ckpts if str(c) not in logged_paths and c.name not in logged_paths]
 
     if not missing:

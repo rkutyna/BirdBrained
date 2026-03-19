@@ -1,0 +1,3 @@
+History check showed the stale general log benchmark at `0.963122`, but the active `subset98_combined` history already had a higher best of `0.974271` on March 19, 2026. I tested one throughput hypothesis in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): `bs=64 on stage3 cap=6 baseline`, aiming to buy more `layer2` time inside the 7200-second budget.
+
+Result: `top1_val_acc=0.967410`, `top1_test_acc=0.969822`, `13` epochs in `7200.4s`, with analysis `val_still_improving; hit_time_budget; flat(delta=-0.0034)`. It beat `0.963122` but did not beat the real active-mode best `0.974271`, so I reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents.

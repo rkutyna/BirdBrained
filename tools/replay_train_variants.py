@@ -6,7 +6,7 @@ outer loop, while this script replays concrete historical train.py variants or
 manifests of config deltas for controlled re-evaluation.
 
 Typical use:
-    python replay_train_variants.py artifacts/autoresearch_replays/manifests/last8_one_hour.json
+    python tools/replay_train_variants.py artifacts/autoresearch_replays/manifests/last8_one_hour.json
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 TRAIN_PY = ROOT / "train.py"
 AUTORESEARCH_LOG = ROOT / "artifacts" / "autoresearch_log.csv"
 REPLAYS_DIR = ROOT / "artifacts" / "autoresearch_replays"

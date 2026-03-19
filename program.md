@@ -26,11 +26,11 @@ This is the single number reported in `artifacts/autoresearch_log.csv`. The goal
 | File | Role | Modifiable? |
 |------|------|-------------|
 | `train.py` | Training script -- the agent iterates on this | **YES** |
-| `prepare.py` | One-time dataset setup | NO |
+| `dataprep/prepare.py` | One-time dataset setup | NO |
 | `program.md` | These instructions | NO |
 | `artifacts/autoresearch_log.csv` | Experiment log (append-only) | Read only |
 | `artifacts/autoresearch_best.pt` | Best checkpoint (auto-saved) | Managed by train.py |
-| `artifacts/autoresearch_splits.pkl` | Cached data splits | Managed by prepare.py |
+| `artifacts/autoresearch_splits.pkl` | Cached data splits | Managed by dataprep/prepare.py |
 
 ## What you CAN do
 
@@ -66,7 +66,7 @@ You may also modify `build_transforms()`, `build_model()`, `build_optimizer()`, 
 
 ## What you CANNOT do
 
-- Modify `prepare.py` -- dataset loading logic is fixed.
+- Modify `dataprep/prepare.py` -- dataset loading logic is fixed.
 - Modify the `# === EVALUATION & LOGGING` block at the bottom of `train.py` -- this ensures consistent logging and the structured summary output.
 - Modify the constants section (`SEED`, `TARGET_SIZE`, `IMAGENET_*`, paths).
 - Modify `artifacts/autoresearch_log.csv` -- only append via train.py.

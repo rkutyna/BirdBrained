@@ -7,7 +7,7 @@ this file; prepare.py and the logging/checkpointing block at the end are
 never modified.
 
 Usage:
-    python prepare.py          # once, to build the cached splits
+    python dataprep/prepare.py  # once, to build the cached splits
     python train.py            # run one experiment (default 30-min budget)
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
 DROPOUT = 0.4
 
 # --- Species mode ---
-SPECIES_MODE = "full555"  # set by autorun.py --species
+SPECIES_MODE = "base_combined"  # set by autorun.py --species
 
 # --- Data ---
 BATCH_SIZE = 32
@@ -153,18 +153,36 @@ IMAGENET_PAD_RGB = tuple(int(round(c * 255)) for c in IMAGENET_MEAN)
 DATA_ROOT = Path("NABirds Dataset/nabirds")
 IMAGES_DIR = DATA_ROOT / "images"
 ARTIFACTS_DIR = Path("artifacts")
+MODEL_DIR = ARTIFACTS_DIR / "resnet50"
+SPLITS_DIR = ARTIFACTS_DIR / "splits"
+LABELS_DIR = ARTIFACTS_DIR / "labels"
 
 # Paths derived from SPECIES_MODE
 if SPECIES_MODE == "full555":
-    CACHE_PKL = ARTIFACTS_DIR / "autoresearch_splits_full555.pkl"
-    LABEL_NAMES_CSV = ARTIFACTS_DIR / "label_names_nabirds_all_specific.csv"
-    LOG_CSV = ARTIFACTS_DIR / "autoresearch_log_full555.csv"
-    BEST_CKPT = ARTIFACTS_DIR / "autoresearch_best_full555.pt"
+    CACHE_PKL = SPLITS_DIR / "full555.pkl"
+    LABEL_NAMES_CSV = LABELS_DIR / "label_names_nabirds_all_specific.csv"
+    LOG_CSV = MODEL_DIR / "full555" / "experiment_log.csv"
+    BEST_CKPT = MODEL_DIR / "full555" / "best.pt"
+elif SPECIES_MODE == "base_species":
+    CACHE_PKL = SPLITS_DIR / "base_species.pkl"
+    LABEL_NAMES_CSV = LABELS_DIR / "label_names_nabirds_base_species.csv"
+    LOG_CSV = MODEL_DIR / "base_species" / "experiment_log.csv"
+    BEST_CKPT = MODEL_DIR / "base_species" / "best.pt"
+elif SPECIES_MODE == "base_combined":
+    CACHE_PKL = SPLITS_DIR / "base_combined.pkl"
+    LABEL_NAMES_CSV = LABELS_DIR / "label_names_nabirds_base_species.csv"
+    LOG_CSV = MODEL_DIR / "base_combined" / "experiment_log.csv"
+    BEST_CKPT = MODEL_DIR / "base_combined" / "best.pt"
+elif SPECIES_MODE == "subset98_combined":
+    CACHE_PKL = SPLITS_DIR / "subset98_combined.pkl"
+    LABEL_NAMES_CSV = LABELS_DIR / "label_names.csv"
+    LOG_CSV = MODEL_DIR / "subset98_combined" / "experiment_log.csv"
+    BEST_CKPT = MODEL_DIR / "subset98_combined" / "best.pt"
 else:
-    CACHE_PKL = ARTIFACTS_DIR / "autoresearch_splits.pkl"
-    LABEL_NAMES_CSV = ARTIFACTS_DIR / "label_names.csv"
-    LOG_CSV = ARTIFACTS_DIR / "autoresearch_log.csv"
-    BEST_CKPT = ARTIFACTS_DIR / "autoresearch_best.pt"
+    CACHE_PKL = SPLITS_DIR / "subset98.pkl"
+    LABEL_NAMES_CSV = LABELS_DIR / "label_names.csv"
+    LOG_CSV = MODEL_DIR / "subset98" / "experiment_log.csv"
+    BEST_CKPT = MODEL_DIR / "subset98" / "best.pt"
 PROGRESS_FILE = ARTIFACTS_DIR / "autoresearch_progress.json"
 
 LOG_COLUMNS = [
@@ -244,7 +262,7 @@ def load_splits() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
     """Load cached splits from prepare.py. Returns (train_df, val_df, test_df, label_names)."""
     if not CACHE_PKL.exists():
         raise FileNotFoundError(
-            f"Cache not found at {CACHE_PKL}. Run `python prepare.py` first."
+            f"Cache not found at {CACHE_PKL}. Run `python dataprep/prepare.py` first."
         )
     with open(CACHE_PKL, "rb") as f:
         data = pickle.load(f)
@@ -253,7 +271,7 @@ def load_splits() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
 
 def append_log_row(row: dict[str, object]) -> None:
     """Append one run to the log, migrating older CSVs to the current schema."""
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_CSV.parent.mkdir(parents=True, exist_ok=True)
 
     if not LOG_CSV.exists():
         with open(LOG_CSV, "w", newline="", encoding="utf-8") as f:
@@ -1035,6 +1053,7 @@ def main():
     status = "keep" if is_new_best else "discard"
     if is_new_best:
         print(f"NEW BEST! {val_acc:.4f} > {prev_best:.4f}")
+        BEST_CKPT.parent.mkdir(parents=True, exist_ok=True)
         torch.save(eval_model.state_dict(), BEST_CKPT)
         print(f"Checkpoint saved: {BEST_CKPT}")
     else:
@@ -1077,6 +1096,13 @@ def main():
     if PROGRESS_FILE.exists():
         PROGRESS_FILE.unlink()
 
+    # Force-exit to prevent DataLoader worker hang on macOS
+    # All results are already logged/saved at this point.
+    import os
+    os._exit(0)
+
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.set_start_method("fork", force=True)
     main()

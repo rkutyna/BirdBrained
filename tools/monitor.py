@@ -2,8 +2,8 @@
 """Live autoresearch monitor — run in a separate terminal.
 
 Usage:
-    python monitor.py            # refresh every 15s
-    python monitor.py --interval 5   # refresh every 5s
+    python tools/monitor.py            # refresh every 15s
+    python tools/monitor.py --interval 5   # refresh every 5s
 """
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 LOG_CSVS = {
-    "subset98": ROOT / "artifacts" / "autoresearch_log.csv",
-    "full555": ROOT / "artifacts" / "autoresearch_log_full555.csv",
+    "subset98": ROOT / "artifacts" / "resnet50" / "subset98" / "experiment_log.csv",
+    "full555": ROOT / "artifacts" / "resnet50" / "full555" / "experiment_log.csv",
 }
 STATUS_FILE = ROOT / "artifacts" / "autoresearch_status.json"
 PROGRESS_FILE = ROOT / "artifacts" / "autoresearch_progress.json"

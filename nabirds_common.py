@@ -30,8 +30,9 @@ SEED = 42
 DATA_ROOT = Path("NABirds Dataset/nabirds")
 IMAGES_DIR = DATA_ROOT / "images"
 ARTIFACTS_DIR = Path("artifacts")
-DEFAULT_LABEL_NAMES_CSV = ARTIFACTS_DIR / "label_names.csv"
-ALL_SPECIFIC_LABEL_NAMES_CSV = ARTIFACTS_DIR / "label_names_nabirds_all_specific.csv"
+LABELS_DIR = ARTIFACTS_DIR / "labels"
+DEFAULT_LABEL_NAMES_CSV = LABELS_DIR / "label_names.csv"
+ALL_SPECIFIC_LABEL_NAMES_CSV = LABELS_DIR / "label_names_nabirds_all_specific.csv"
 
 
 # ---------------------------------------------------------------------------

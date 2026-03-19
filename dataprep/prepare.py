@@ -6,8 +6,8 @@ confirms label files, and serialises DataLoaders to artifacts/ so that
 train.py can load them instantly without re-parsing metadata every run.
 
 Usage:
-    python prepare.py          # run once before the first experiment
-    python prepare.py --force  # re-build even if cache exists
+    python dataprep/prepare.py          # run once before the first experiment
+    python dataprep/prepare.py --force  # re-build even if cache exists
 
 This file is NEVER modified by the research agent.
 """
@@ -17,6 +17,11 @@ import argparse
 import pickle
 import sys
 from pathlib import Path
+
+# Ensure project root is importable regardless of how this script is launched.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
 import pandas as pd
@@ -36,16 +41,24 @@ from nabirds_common import (
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+LABELS_DIR = ARTIFACTS_DIR / "labels"
+SPLITS_DIR = ARTIFACTS_DIR / "splits"
+
 SPECIES_CONFIGS = {
     "subset98": {
-        "label_csv": ARTIFACTS_DIR / "label_names.csv",
+        "label_csv": LABELS_DIR / "label_names.csv",
         "split_file": DATA_ROOT / "train_test_split_8020_target_species.txt",
-        "cache_pkl": ARTIFACTS_DIR / "autoresearch_splits.pkl",
+        "cache_pkl": SPLITS_DIR / "subset98.pkl",
     },
     "full555": {
-        "label_csv": ARTIFACTS_DIR / "label_names_nabirds_all_specific.csv",
+        "label_csv": LABELS_DIR / "label_names_nabirds_all_specific.csv",
         "split_file": DATA_ROOT / "train_test_split_8020_all_specific.txt",
-        "cache_pkl": ARTIFACTS_DIR / "autoresearch_splits_full555.pkl",
+        "cache_pkl": SPLITS_DIR / "full555.pkl",
+    },
+    "base_species": {
+        "label_csv": LABELS_DIR / "label_names_nabirds_base_species.csv",
+        "split_file": DATA_ROOT / "train_test_split_8020_all_specific.txt",
+        "cache_pkl": SPLITS_DIR / "base_species.pkl",
     },
 }
 
@@ -204,7 +217,7 @@ def main():
         print(f"  Classes: {len(data['label_names'])}")
 
         # Save cache
-        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+        SPLITS_DIR.mkdir(parents=True, exist_ok=True)
         with open(cache_pkl, "wb") as f:
             pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
         print(f"  Saved to {cache_pkl}")

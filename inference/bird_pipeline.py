@@ -23,8 +23,9 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 IMAGENET_PAD_RGB = tuple(int(round(c * 255)) for c in IMAGENET_MEAN)
 TARGET_SIZE = 240
-DEFAULT_LABEL_NAMES_CSV = "artifacts/label_names.csv"
-ALL_SPECIFIC_LABEL_NAMES_CSV = "artifacts/label_names_nabirds_all_specific.csv"
+DEFAULT_LABEL_NAMES_CSV = "artifacts/labels/label_names.csv"
+ALL_SPECIFIC_LABEL_NAMES_CSV = "artifacts/labels/label_names_nabirds_all_specific.csv"
+BASE_SPECIES_LABEL_NAMES_CSV = "artifacts/labels/label_names_nabirds_base_species.csv"
 
 
 @dataclass
@@ -111,8 +112,8 @@ def resolve_device(device: str) -> str:
     return device
 
 
-def list_classifier_checkpoints(artifacts_dir: str = "artifacts") -> list[str]:
-    return sorted(str(p) for p in Path(artifacts_dir).glob("*.pt"))
+def list_classifier_checkpoints(artifacts_dir: str = "artifacts/resnet50") -> list[str]:
+    return sorted(str(p) for p in Path(artifacts_dir).rglob("*.pt"))
 
 
 def _unwrap_checkpoint_state(state: Any) -> Any:
@@ -161,9 +162,9 @@ def _candidate_label_name_paths(requested_path: str | Path) -> list[Path]:
     ]
     if requested.parent.exists():
         candidates.extend(sorted(requested.parent.glob("label_names*.csv")))
-    artifacts_dir = Path("artifacts")
-    if artifacts_dir.exists():
-        candidates.extend(sorted(artifacts_dir.glob("label_names*.csv")))
+    labels_dir = Path("artifacts/labels")
+    if labels_dir.exists():
+        candidates.extend(sorted(labels_dir.glob("label_names*.csv")))
 
     unique: list[Path] = []
     seen: set[str] = set()

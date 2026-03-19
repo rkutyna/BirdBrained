@@ -67,43 +67,80 @@ Given a folder (or upload) of bird photos, the pipeline:
 
 ```
 capstone/
-├── bird_pipeline.py              Core inference pipeline (detection, classification, sharpness, metadata)
-├── bird_gallery_frontend.py      Main Streamlit app (Classify + Training tabs)
-├── training_engine.py            Training pipeline with job queue (runs as subprocess)
-├── nabirds_frontend.py           Checkpoint comparison app (NABirds test split)
-├── label_photos.py               Manual photo labeling tool
-├── eval_missing_checkpoints.py   Retroactive checkpoint evaluation script
-├── yolo_test.py                  Standalone YOLO detection utility
-├── .streamlit/config.toml        Streamlit theme configuration
+├── frontend/                                  Streamlit applications
+│   ├── bird_gallery_frontend.py               Main app (Classify + Training tabs)
+│   ├── nabirds_frontend.py                    Checkpoint comparison app
+│   └── label_photos.py                        Manual photo labeling tool
+│
+├── training/                                  Training orchestration
+│   ├── autorun.py                             Codex-driven autoresearch loop
+│   └── training_engine.py                     Training pipeline + job queue (subprocess)
+│
+├── dataprep/                                  Dataset preparation
+│   ├── prepare.py                             NABirds train/val/test splits
+│   ├── prepare_birdsnap.py                    Birdsnap download from HuggingFace
+│   ├── prepare_inat.py                        iNaturalist API download
+│   └── prepare_combined.py                    Merge NABirds + external datasets
+│
+├── inference/                                 Core inference pipeline
+│   └── bird_pipeline.py                       Detection, classification, sharpness, metadata
+│
+├── tools/                                     Standalone utilities
+│   ├── yolo_test.py                           YOLO bird detection + crop extraction
+│   ├── eval_missing_checkpoints.py            Retroactive checkpoint evaluation
+│   ├── monitor.py                             Live terminal monitor for autoresearch
+│   └── replay_train_variants.py               Replay saved train.py variants
+│
+├── notebooks/                                 Jupyter notebooks (historical/exploratory)
+│   ├── resnet.ipynb                           ResNet training development
+│   ├── overnight.ipynb                        Extended training experiments
+│   ├── bird_infer_pipeline.ipynb              Inference pipeline development
+│   ├── visualize_runs.ipynb                   Training run visualization
+│   └── vit_test.ipynb                         Vision Transformer experiments
+│
+├── prompts/                                   Codex prompt templates
+│   └── autoresearch_codex_prompt.txt
 │
 ├── artifacts/
-│   ├── label_names.csv                        98 target species
-│   ├── label_names_nabirds_all_specific.csv   555 NABirds-specific classes (incl. sex/morph)
-│   ├── label_names_nabirds_base_species.csv   404 base species (variants collapsed)
-│   ├── *.pt                                   ResNet-50 checkpoints
-│   ├── logs/
-│   │   ├── run_summary.csv        Training run history (accuracy, hyperparams, checkpoint paths)
-│   │   ├── epoch_metrics.csv      Per-epoch train/val metrics
-│   │   ├── run_configs.jsonl      Full config snapshots per run
-│   │   ├── run_queue.json         Current training job queue
-│   │   ├── progress_*.json        Real-time job progress (read by frontend)
-│   │   └── training_*.log         Per-job subprocess logs
-│   └── pipeline_runs/<run_id>/
-│       ├── originals/             Copied input images
-│       ├── crops/                 Detected bird crops
-│       ├── results.csv            Structured per-image results (incl. top-5)
-│       ├── results.json           JSON export
-│       ├── errors.csv             Error log (if any)
-│       └── pipeline.log           Detailed execution log
+│   ├── labels/                                Species label CSVs
+│   │   ├── label_names.csv                    98 target species
+│   │   ├── label_names_nabirds_all_specific.csv  555 NABirds-specific classes
+│   │   └── label_names_nabirds_base_species.csv  404 base species
+│   ├── splits/                                Cached train/val/test DataFrames
+│   │   ├── subset98.pkl, full555.pkl, etc.
+│   │   └── *_combined.pkl                     Combined dataset splits
+│   ├── resnet50/                              Model checkpoints (gitignored)
+│   │   ├── subset98/                          98-species autoresearch outputs
+│   │   │   ├── best.pt                        Best checkpoint
+│   │   │   └── experiment_log.csv             Experiment history
+│   │   ├── full555/                           555-species outputs
+│   │   └── runs/                              Individual training run checkpoints
+│   ├── external/                              External dataset caches
+│   │   ├── birdsnap_splits.pkl
+│   │   ├── inat_splits.pkl
+│   │   └── inat_manifest.json
+│   ├── autoresearch_runner/                   Per-iteration artifacts
+│   ├── logs/                                  Training logs (gitignored)
+│   │   ├── run_summary.csv                    Consolidated run results
+│   │   ├── run_queue.json                     Job queue state
+│   │   ├── progress_*.json                    Real-time job progress
+│   │   └── training_*.log                     Per-job subprocess logs
+│   └── pipeline_runs/<run_id>/                Inference outputs (gitignored)
+│       ├── originals/, crops/
+│       ├── results.csv / .json
+│       └── pipeline.log
 │
-├── NABirds Dataset/nabirds/       NABirds metadata and images (not tracked in git)
+├── .streamlit/config.toml                     Streamlit theme configuration
+├── NABirds Dataset/nabirds/                   NABirds metadata and images (not in git)
 │
-├── resnet.ipynb                   ResNet training/fine-tuning notebook
-├── overnight.ipynb                Extended training experiments
-├── bird_infer_pipeline.ipynb      Inference pipeline development notebook
-├── forest_vis.ipynb               NABirds forest/hierarchy visualization
-└── vit_test.ipynb                 Vision Transformer experiments
+├── train.py                                   Self-contained training script (Codex-managed)
+├── nabirds_common.py                          Shared constants and utilities
+├── program.md                                 Codex agent instructions
+├── REPO_MAP.md                                Comprehensive repository map
+└── README.md
 ```
+
+See [REPO_MAP.md](REPO_MAP.md) for a detailed file-by-file map with dependency graphs and data flows.
 
 ## Requirements
 
@@ -123,7 +160,7 @@ pip install --upgrade pip
 pip install numpy pandas pillow streamlit ultralytics torch torchvision
 ```
 
-Optional (RAW `.nef` handling in `yolo_test.py` only):
+Optional (RAW `.nef` handling in `tools/yolo_test.py` only):
 
 ```bash
 pip install rawpy
@@ -131,19 +168,19 @@ pip install rawpy
 
 ### Data
 
-Training and evaluation require the [NABirds dataset](https://dl.allawnmilner.com/nabirds) extracted to `NABirds Dataset/nabirds/`. Inference on personal photos does not require this dataset — only a trained checkpoint (`.pt` file) in `artifacts/`.
+Training and evaluation require the [NABirds dataset](https://dl.allawnmilner.com/nabirds) extracted to `NABirds Dataset/nabirds/`. Inference on personal photos does not require this dataset — only a trained checkpoint (`.pt` file) in `artifacts/resnet50/`.
 
 ## Running Inference (Primary App)
 
 ```bash
-streamlit run bird_gallery_frontend.py
+streamlit run frontend/bird_gallery_frontend.py
 ```
 
 ### Classify Tab
 
 Configure in the sidebar:
 
-- **Classifier checkpoint** — select from `artifacts/*.pt`. The sidebar displays the recorded test accuracy from `run_summary.csv` when available.
+- **Classifier checkpoint** — select from `artifacts/resnet50/`. The sidebar displays the recorded test accuracy from `run_summary.csv` when available.
 - **Species mode** — toggle between 98 target species or 555 all-specific NABirds classes. Checkpoints are filtered to match.
 - **YOLO settings** — weights path, confidence threshold, batch size.
 - **Input mode**:
@@ -189,7 +226,7 @@ Each stage saves a checkpoint, evaluates on the test split, and records results 
 ## Photo Labeling Tool
 
 ```bash
-streamlit run label_photos.py
+streamlit run frontend/label_photos.py
 ```
 
 Create ground-truth labels for accuracy evaluation:
@@ -202,7 +239,7 @@ Create ground-truth labels for accuracy evaluation:
 ## Checkpoint Comparison
 
 ```bash
-streamlit run nabirds_frontend.py
+streamlit run frontend/nabirds_frontend.py
 ```
 
 Compare checkpoints side-by-side on the NABirds test split:
@@ -214,26 +251,26 @@ Compare checkpoints side-by-side on the NABirds test split:
 To retroactively evaluate checkpoints not yet in `run_summary.csv`:
 
 ```bash
-python eval_missing_checkpoints.py
+python tools/eval_missing_checkpoints.py
 ```
 
 ## Overnight Autoresearch
 
-`autorun.py` is an outer loop for unattended Codex-driven experimentation. It
+`training/autorun.py` is an outer loop for unattended Codex-driven experimentation. It
 launches a fresh `codex exec` session each iteration, asks it to do exactly one
 `train.py` experiment, then keeps or restores `train.py` based on the newest
-row in `artifacts/autoresearch_log.csv`.
+row in the experiment log CSV.
 
 Basic usage:
 
 ```bash
-python autorun.py --iterations 20 --danger-full-access
+python training/autorun.py --iterations 20 --danger-full-access
 ```
 
 Time-based stop condition:
 
 ```bash
-python autorun.py --hours 8 --danger-full-access
+python training/autorun.py --hours 8 --danger-full-access
 ```
 
 Useful flags:
@@ -276,16 +313,16 @@ Tags are written in a two-pass approach: old prediction tags are cleared first, 
 
 | File | Classes | Description |
 |------|---------|-------------|
-| `artifacts/label_names.csv` | 98 | Target species subset — used for most training runs |
-| `artifacts/label_names_nabirds_all_specific.csv` | 555 | All NABirds-specific classes including sex/morph variants |
-| `artifacts/label_names_nabirds_base_species.csv` | 404 | Top-level species (variants collapsed) — used by the labeling tool |
+| `artifacts/labels/label_names.csv` | 98 | Target species subset — used for most training runs |
+| `artifacts/labels/label_names_nabirds_all_specific.csv` | 555 | All NABirds-specific classes including sex/morph variants |
+| `artifacts/labels/label_names_nabirds_base_species.csv` | 404 | Top-level species (variants collapsed) — used by the labeling tool |
 
 ## Standalone Utilities
 
-### YOLO Detection (`yolo_test.py`)
+### YOLO Detection (`tools/yolo_test.py`)
 
 ```bash
-python yolo_test.py <source_folder> [--imgsz 1280] [--device mps] [--recursive]
+python tools/yolo_test.py <source_folder> [--imgsz 1280] [--device mps] [--recursive]
 ```
 
 Standalone bird detection with crop extraction. Supports JPEG, PNG, BMP, TIFF, and RAW `.nef` files (with `rawpy`). Saves top-3 bird crops per image.
@@ -295,4 +332,4 @@ Standalone bird detection with crop extraction. Supports JPEG, PNG, BMP, TIFF, a
 - Classifier checkpoints with either a bare `nn.Linear` head or `nn.Sequential(Dropout, Linear)` head are detected and loaded automatically.
 - The checkpoint auto-selector picks the checkpoint with the highest test accuracy from `run_summary.csv`, falling back to stage-rank heuristic (stage 3 > stage 2 > stage 1) if no summary data exists.
 - YOLO detection filters by class name `"bird"` — non-bird detections are discarded.
-- Training runs as a subprocess (`python training_engine.py --job-id <id>`), communicating progress via JSON files on disk. This keeps the Streamlit frontend responsive during long training runs.
+- Training runs as a subprocess (`python training/training_engine.py --job-id <id>`), communicating progress via JSON files on disk. This keeps the Streamlit frontend responsive during long training runs.

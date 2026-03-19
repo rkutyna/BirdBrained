@@ -4,7 +4,7 @@ Manual bird photo labeling tool.
 Opens a folder of photos one at a time, lets you search & select a species,
 and saves labels to labels.csv in the same folder.
 
-Run with:  streamlit run label_photos.py
+Run with:  streamlit run frontend/label_photos.py
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from PIL import Image
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-SPECIES_CSV = Path("artifacts/label_names_nabirds_base_species.csv")
+SPECIES_CSV = Path("artifacts/labels/label_names_nabirds_base_species.csv")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 LABELS_FILENAME = "labels.csv"
 LABELS_COLUMNS = ["filename", "species", "labeled_at"]

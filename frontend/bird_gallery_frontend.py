@@ -12,13 +12,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
+# Ensure project root is importable regardless of how this script is launched.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 import numpy as np
 import pandas as pd
 from PIL import Image
 import streamlit as st
 
-from bird_pipeline import (
+from inference.bird_pipeline import (
     ALL_SPECIFIC_LABEL_NAMES_CSV,
+    BASE_SPECIES_LABEL_NAMES_CSV,
     DEFAULT_LABEL_NAMES_CSV,
     PipelineConfig,
     get_default_device,
@@ -29,7 +35,7 @@ from bird_pipeline import (
     run_inference_batch,
     classify_crops_batch,
 )
-from training_engine import (
+from training.training_engine import (
     LOGS_DIR,
     QUEUE_JSON,
     SUMMARY_CSV,
@@ -51,10 +57,43 @@ COLOR_MAP = {
     "red": "#db4437",
 }
 
-AUTORESEARCH_LOG_CSV = Path("artifacts/autoresearch_log.csv")
-AUTORESEARCH_BEST_CKPT = Path("artifacts/autoresearch_best.pt")
-AUTORESEARCH_LOG_CSV_FULL555 = Path("artifacts/autoresearch_log_full555.csv")
-AUTORESEARCH_BEST_CKPT_FULL555 = Path("artifacts/autoresearch_best_full555.pt")
+_MODEL_DIR = Path("artifacts/resnet50")
+AUTORESEARCH_LOG_CSV = _MODEL_DIR / "subset98" / "experiment_log.csv"
+AUTORESEARCH_BEST_CKPT = _MODEL_DIR / "subset98" / "best.pt"
+AUTORESEARCH_LOG_CSV_FULL555 = _MODEL_DIR / "full555" / "experiment_log.csv"
+AUTORESEARCH_BEST_CKPT_FULL555 = _MODEL_DIR / "full555" / "best.pt"
+AUTORESEARCH_LOG_CSV_SUBSET98_COMBINED = _MODEL_DIR / "subset98_combined" / "experiment_log.csv"
+AUTORESEARCH_BEST_CKPT_SUBSET98_COMBINED = _MODEL_DIR / "subset98_combined" / "best.pt"
+AUTORESEARCH_LOG_CSV_BASE_COMBINED = _MODEL_DIR / "base_combined" / "experiment_log.csv"
+AUTORESEARCH_BEST_CKPT_BASE_COMBINED = _MODEL_DIR / "base_combined" / "best.pt"
+
+# Species mode definitions: (display_name, label_csv, checkpoint_keywords, best_ckpt)
+SPECIES_MODES = {
+    "98 species": {
+        "label_csv": DEFAULT_LABEL_NAMES_CSV,
+        "keywords": [],  # default bucket — no keyword match needed
+        "exclude_keywords": ["all_specific", "full555", "base_species", "base_combined", "subset98_combined"],
+        "best_ckpt": AUTORESEARCH_BEST_CKPT,
+    },
+    "98 species (combined)": {
+        "label_csv": DEFAULT_LABEL_NAMES_CSV,
+        "keywords": ["subset98_combined"],
+        "exclude_keywords": [],
+        "best_ckpt": AUTORESEARCH_BEST_CKPT_SUBSET98_COMBINED,
+    },
+    "404 base species (combined)": {
+        "label_csv": BASE_SPECIES_LABEL_NAMES_CSV,
+        "keywords": ["base_species", "base_combined"],
+        "exclude_keywords": [],
+        "best_ckpt": AUTORESEARCH_BEST_CKPT_BASE_COMBINED,
+    },
+    "555 species": {
+        "label_csv": ALL_SPECIFIC_LABEL_NAMES_CSV,
+        "keywords": ["all_specific", "full555"],
+        "exclude_keywords": [],
+        "best_ckpt": AUTORESEARCH_BEST_CKPT_FULL555,
+    },
+}
 
 
 def confidence_badge(conf: float | None, color_name: str | None) -> str:
@@ -219,16 +258,21 @@ def _load_autoresearch_log(
         return None
 
 
+_CKPT_TO_LOG = {
+    AUTORESEARCH_BEST_CKPT.name: AUTORESEARCH_LOG_CSV,
+    AUTORESEARCH_BEST_CKPT_FULL555.name: AUTORESEARCH_LOG_CSV_FULL555,
+    AUTORESEARCH_BEST_CKPT_SUBSET98_COMBINED.name: AUTORESEARCH_LOG_CSV_SUBSET98_COMBINED,
+    AUTORESEARCH_BEST_CKPT_BASE_COMBINED.name: AUTORESEARCH_LOG_CSV_BASE_COMBINED,
+}
+
+
 def _autoresearch_best_metrics(
     checkpoint_path: str,
     autoresearch_log_csv: Path = AUTORESEARCH_LOG_CSV,
 ) -> dict[str, float | str] | None:
     ckpt_name = Path(checkpoint_path).name
-    if ckpt_name == AUTORESEARCH_BEST_CKPT_FULL555.name:
-        log_csv = AUTORESEARCH_LOG_CSV_FULL555
-    elif ckpt_name == AUTORESEARCH_BEST_CKPT.name:
-        log_csv = autoresearch_log_csv
-    else:
+    log_csv = _CKPT_TO_LOG.get(ckpt_name)
+    if log_csv is None:
         return None
     df = _load_autoresearch_log(log_csv)
     if df is None or df.empty:
@@ -250,11 +294,14 @@ def _autoresearch_checkpoint_sanity(
     sample_size: int = 32,
 ) -> dict[str, float | str | bool] | None:
     ckpt_name = Path(checkpoint_path).name
-    if ckpt_name == AUTORESEARCH_BEST_CKPT_FULL555.name:
-        cache_path = Path("artifacts/autoresearch_splits_full555.pkl")
-    elif ckpt_name == AUTORESEARCH_BEST_CKPT.name:
-        cache_path = Path("artifacts/autoresearch_splits.pkl")
-    else:
+    _ckpt_to_splits = {
+        str(AUTORESEARCH_BEST_CKPT): Path("artifacts/splits/subset98.pkl"),
+        str(AUTORESEARCH_BEST_CKPT_FULL555): Path("artifacts/splits/full555.pkl"),
+        str(AUTORESEARCH_BEST_CKPT_SUBSET98_COMBINED): Path("artifacts/splits/subset98_combined.pkl"),
+        str(AUTORESEARCH_BEST_CKPT_BASE_COMBINED): Path("artifacts/splits/base_combined.pkl"),
+    }
+    cache_path = _ckpt_to_splits.get(checkpoint_path)
+    if cache_path is None:
         return None
     if not cache_path.exists():
         return None
@@ -324,13 +371,20 @@ def _checkpoint_metrics(
         return None
 
 
-def _filter_checkpoints_by_mode(checkpoints: list[str], all_specific: bool) -> list[str]:
-    if all_specific:
-        filtered = [c for c in checkpoints if "all_specific" in Path(c).name
-                    or Path(c).name == AUTORESEARCH_BEST_CKPT_FULL555.name]
+def _filter_checkpoints_by_mode(checkpoints: list[str], species_mode: str) -> list[str]:
+    mode_cfg = SPECIES_MODES.get(species_mode)
+    if mode_cfg is None:
+        return checkpoints
+    keywords = mode_cfg["keywords"]
+    exclude = mode_cfg["exclude_keywords"]
+    if keywords:
+        # Include checkpoints matching any keyword
+        filtered = [c for c in checkpoints
+                    if any(kw in Path(c).name for kw in keywords)]
     else:
-        filtered = [c for c in checkpoints if "all_specific" not in Path(c).name
-                    and Path(c).name != AUTORESEARCH_BEST_CKPT_FULL555.name]
+        # Default bucket: exclude checkpoints matching other modes
+        filtered = [c for c in checkpoints
+                    if not any(kw in Path(c).name for kw in exclude)]
     return filtered if filtered else checkpoints
 
 
@@ -349,7 +403,7 @@ def choose_best_checkpoint(
         raise ValueError("No checkpoints provided.")
 
     # --- Candidate 1: autoresearch best (from autoresearch_log csvs) ---
-    _autoresearch_names = {AUTORESEARCH_BEST_CKPT.name, AUTORESEARCH_BEST_CKPT_FULL555.name}
+    _autoresearch_names = set(_CKPT_TO_LOG.keys())
     autoresearch_ckpt = next(
         (ckpt for ckpt in ckpts if Path(ckpt).name in _autoresearch_names),
         None,
@@ -875,7 +929,7 @@ def _launch_next_job() -> bool:
     log_path = LOGS_DIR / f"training_{job_id}.log"
     log_f = open(log_path, "w")
     proc = subprocess.Popen(
-        [sys.executable, "-u", "training_engine.py", "--job-id", job_id],
+        [sys.executable, "-u", "training/training_engine.py", "--job-id", job_id],
         stdout=log_f,
         stderr=log_f,
     )
@@ -1418,14 +1472,16 @@ def main() -> None:
                 selected_run_dir = next((p for p in previous_runs if p.name == selected_name), None)
 
         st.header("Models")
-        all_specific = st.toggle(
-            "All 555 NABirds species",
-            value=False,
-            help="Off = 98 target species subset  |  On = all 555 NABirds-specific classes",
+        species_mode = st.selectbox(
+            "Species mode",
+            options=list(SPECIES_MODES.keys()),
+            index=0,
+            help="Select the species classification mode for inference",
         )
-        label_names_csv = ALL_SPECIFIC_LABEL_NAMES_CSV if all_specific else DEFAULT_LABEL_NAMES_CSV
+        mode_cfg = SPECIES_MODES[species_mode]
+        label_names_csv = mode_cfg["label_csv"]
 
-        all_ckpts = list_classifier_checkpoints("artifacts")
+        all_ckpts = list_classifier_checkpoints("artifacts/resnet50")
         if not all_ckpts:
             st.error("No .pt classifier checkpoints found in artifacts/")
             # Still render training tab so user can train a model
@@ -1433,7 +1489,7 @@ def main() -> None:
                 render_training_tab()
             return
 
-        ckpts = _filter_checkpoints_by_mode(all_ckpts, all_specific)
+        ckpts = _filter_checkpoints_by_mode(all_ckpts, species_mode)
         if not ckpts:
             st.warning("No checkpoints found for the selected species set.")
             ckpts = all_ckpts

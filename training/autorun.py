@@ -28,10 +28,10 @@ from datetime import datetime
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 TRAIN_PY = ROOT / "train.py"
 PROGRAM_MD = ROOT / "program.md"
-AUTORESEARCH_LOG = ROOT / "artifacts" / "autoresearch_log.csv"
+AUTORESEARCH_LOG = ROOT / "artifacts" / "resnet50" / "subset98" / "experiment_log.csv"
 FALLBACK_SUMMARY = ROOT / "artifacts" / "logs" / "run_summary.csv"
 RUNNER_DIR = ROOT / "artifacts" / "autoresearch_runner"
 PROMPT_TEMPLATE = ROOT / "prompts" / "autoresearch_codex_prompt.txt"
@@ -167,8 +167,8 @@ def load_extra_instructions(path: Path | None) -> str:
 
 
 CROSS_REF_LOGS = {
-    "subset98": ROOT / "artifacts" / "autoresearch_log.csv",
-    "full555": ROOT / "artifacts" / "autoresearch_log_full555.csv",
+    "subset98": ROOT / "artifacts" / "resnet50" / "subset98" / "experiment_log.csv",
+    "full555": ROOT / "artifacts" / "resnet50" / "full555" / "experiment_log.csv",
 }
 
 
@@ -597,7 +597,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--species",
-        choices=["subset98", "full555"],
+        choices=["subset98", "full555", "base_species", "base_combined", "subset98_combined"],
         default=None,
         help="Species mode. Sets SPECIES_MODE in train.py before each run.",
     )
@@ -637,10 +637,16 @@ def main() -> int:
         return 2
     ensure_layout()
     apply_train_overrides(args)
-    # Update log CSV path if using full555 mode
+    # Update log CSV path to match species mode
     global AUTORESEARCH_LOG
-    if args.species == "full555":
-        AUTORESEARCH_LOG = ROOT / "artifacts" / "autoresearch_log_full555.csv"
+    species_log_map = {
+        "full555": ROOT / "artifacts" / "resnet50" / "full555" / "experiment_log.csv",
+        "base_species": ROOT / "artifacts" / "resnet50" / "base_species" / "experiment_log.csv",
+        "base_combined": ROOT / "artifacts" / "resnet50" / "base_combined" / "experiment_log.csv",
+        "subset98_combined": ROOT / "artifacts" / "resnet50" / "subset98_combined" / "experiment_log.csv",
+    }
+    if args.species in species_log_map:
+        AUTORESEARCH_LOG = species_log_map[args.species]
     if args.tag:
         git_ensure_branch(args.tag)
     template = load_template(args.prompt_template)

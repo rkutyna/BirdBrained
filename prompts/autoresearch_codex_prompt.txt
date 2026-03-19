@@ -40,4 +40,4 @@ Read `{program_md}` for full instructions. Your optimization target is `top1_val
 - Allowed examples: shorten a stage and raise that stage LR to compensate; increase batch size and adjust LR accordingly.
 - Disallowed examples: change optimizer, scheduler, dropout, and stage structure all in one run.
 - Keep NOTES concise and descriptive. If the experiment is coupled, mention both the primary change and the compensating adjustment.
-- Do not modify prepare.py, program.md, or the EVALUATION & LOGGING block in train.py.
+- Do not modify dataprep/prepare.py, program.md, or the EVALUATION & LOGGING block in train.py.

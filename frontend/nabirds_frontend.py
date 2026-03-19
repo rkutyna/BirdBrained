@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 import re
 from typing import Dict, List, Tuple
+
+# Ensure project root is importable regardless of how this script is launched.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
 import pandas as pd
@@ -14,7 +20,7 @@ from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import models, transforms
 
-from bird_pipeline import (
+from inference.bird_pipeline import (
     DEFAULT_LABEL_NAMES_CSV,
     checkpoint_num_classes,
     resolve_label_names_for_checkpoint,
@@ -215,7 +221,7 @@ def inspect_checkpoint_label_setup(
     checkpoint_path: str,
     artifacts_dir: str,
 ) -> tuple[str, int | None, int, bool]:
-    requested_label_names_csv = str(Path(artifacts_dir) / Path(DEFAULT_LABEL_NAMES_CSV).name)
+    requested_label_names_csv = str(DEFAULT_LABEL_NAMES_CSV)
     checkpoint_class_count = checkpoint_num_classes(checkpoint_path)
     resolved_label_names_csv, label_names, auto_resolved = resolve_label_names_for_checkpoint(
         checkpoint_path=checkpoint_path,
@@ -558,7 +564,7 @@ li[role="option"][aria-selected="true"] {
         dataset_root = st.text_input("NABirds root", value="NABirds Dataset/nabirds")
         artifacts_dir = st.text_input("Artifacts dir", value="artifacts")
         artifacts_path = Path(artifacts_dir)
-        ckpt_files = sorted(artifacts_path.glob("*.pt"))
+        ckpt_files = sorted(artifacts_path.rglob("*.pt"))
         ckpt_options = [str(p) for p in ckpt_files]
 
         default_a = str(artifacts_path / "resnet50_nabirds_head_only.pt")

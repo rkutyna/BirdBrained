@@ -2,10 +2,10 @@
 """training_engine.py — Bird species classifier training module + job queue manager.
 
 Run as a subprocess to execute one queued training job:
-    python training_engine.py --job-id <id>
+    python training/training_engine.py --job-id <id>
 
 Import queue helpers (no torch required) from other modules:
-    from training_engine import TrainingConfig, add_to_queue, load_queue, ...
+    from training.training_engine import TrainingConfig, add_to_queue, load_queue, ...
 """
 from __future__ import annotations
 
@@ -20,6 +20,11 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+# Ensure project root is importable regardless of how this script is launched.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
 import pandas as pd
@@ -680,7 +685,8 @@ def train_model(config: TrainingConfig, job_id: str) -> None:
                 epochs, device, job_id, stage_num, progress_base, scaler=scaler,
             )
 
-            ckpt_path = ARTIFACTS_DIR / _ckpt_name(config, stage_num, run_id)
+            ckpt_path = ARTIFACTS_DIR / "resnet50" / "runs" / _ckpt_name(config, stage_num, run_id)
+            ckpt_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(stage_model.state_dict(), ckpt_path)
             print(f"Stage {stage_num} saved: {ckpt_path.name} | best_val_acc={best_val:.4f}")
 
