@@ -259,10 +259,10 @@ def _load_autoresearch_log(
 
 
 _CKPT_TO_LOG = {
-    AUTORESEARCH_BEST_CKPT.name: AUTORESEARCH_LOG_CSV,
-    AUTORESEARCH_BEST_CKPT_FULL555.name: AUTORESEARCH_LOG_CSV_FULL555,
-    AUTORESEARCH_BEST_CKPT_SUBSET98_COMBINED.name: AUTORESEARCH_LOG_CSV_SUBSET98_COMBINED,
-    AUTORESEARCH_BEST_CKPT_BASE_COMBINED.name: AUTORESEARCH_LOG_CSV_BASE_COMBINED,
+    str(AUTORESEARCH_BEST_CKPT): AUTORESEARCH_LOG_CSV,
+    str(AUTORESEARCH_BEST_CKPT_FULL555): AUTORESEARCH_LOG_CSV_FULL555,
+    str(AUTORESEARCH_BEST_CKPT_SUBSET98_COMBINED): AUTORESEARCH_LOG_CSV_SUBSET98_COMBINED,
+    str(AUTORESEARCH_BEST_CKPT_BASE_COMBINED): AUTORESEARCH_LOG_CSV_BASE_COMBINED,
 }
 
 
@@ -270,8 +270,7 @@ def _autoresearch_best_metrics(
     checkpoint_path: str,
     autoresearch_log_csv: Path = AUTORESEARCH_LOG_CSV,
 ) -> dict[str, float | str] | None:
-    ckpt_name = Path(checkpoint_path).name
-    log_csv = _CKPT_TO_LOG.get(ckpt_name)
+    log_csv = _CKPT_TO_LOG.get(checkpoint_path)
     if log_csv is None:
         return None
     df = _load_autoresearch_log(log_csv)
@@ -293,7 +292,6 @@ def _autoresearch_checkpoint_sanity(
     label_names_csv: str,
     sample_size: int = 32,
 ) -> dict[str, float | str | bool] | None:
-    ckpt_name = Path(checkpoint_path).name
     _ckpt_to_splits = {
         str(AUTORESEARCH_BEST_CKPT): Path("artifacts/splits/subset98.pkl"),
         str(AUTORESEARCH_BEST_CKPT_FULL555): Path("artifacts/splits/full555.pkl"),
@@ -378,13 +376,13 @@ def _filter_checkpoints_by_mode(checkpoints: list[str], species_mode: str) -> li
     keywords = mode_cfg["keywords"]
     exclude = mode_cfg["exclude_keywords"]
     if keywords:
-        # Include checkpoints matching any keyword
+        # Include checkpoints matching any keyword in the full path
         filtered = [c for c in checkpoints
-                    if any(kw in Path(c).name for kw in keywords)]
+                    if any(kw in c for kw in keywords)]
     else:
         # Default bucket: exclude checkpoints matching other modes
         filtered = [c for c in checkpoints
-                    if not any(kw in Path(c).name for kw in exclude)]
+                    if not any(kw in c for kw in exclude)]
     return filtered if filtered else checkpoints
 
 
@@ -403,9 +401,9 @@ def choose_best_checkpoint(
         raise ValueError("No checkpoints provided.")
 
     # --- Candidate 1: autoresearch best (from autoresearch_log csvs) ---
-    _autoresearch_names = set(_CKPT_TO_LOG.keys())
+    _autoresearch_paths = set(_CKPT_TO_LOG.keys())
     autoresearch_ckpt = next(
-        (ckpt for ckpt in ckpts if Path(ckpt).name in _autoresearch_names),
+        (ckpt for ckpt in ckpts if ckpt in _autoresearch_paths),
         None,
     )
     autoresearch_acc: float | None = None
@@ -731,12 +729,12 @@ def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
                 r1, r2 = st.columns(2)
                 with r1:
                     if isinstance(row.get("original_path"), str) and row["original_path"] and Path(row["original_path"]).exists():
-                        st.image(Image.open(row["original_path"]), caption="Original", use_container_width=True)
+                        st.image(Image.open(row["original_path"]), caption="Original", width="stretch")
                     else:
                         st.info("Original unavailable")
                 with r2:
                     if isinstance(row.get("crop_path"), str) and row["crop_path"] and Path(row["crop_path"]).exists():
-                        st.image(Image.open(row["crop_path"]), caption="Bird crop", use_container_width=True)
+                        st.image(Image.open(row["crop_path"]), caption="Bird crop", width="stretch")
                     else:
                         st.info("No crop")
 
@@ -1249,7 +1247,7 @@ def render_training_tab() -> None:
                     ["run_label", "stage", "test_acc", "best_val_acc", "num_epochs",
                      "lr", "weight_decay", "label_smoothing", "checkpoint_path", "timestamp"]
                 ].reset_index(drop=True),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
         except Exception as e:
@@ -1324,7 +1322,7 @@ def _render_classify_tab(
                 if errors_path.exists():
                     st.subheader("Errors")
                     err_df = pd.read_csv(errors_path)
-                    st.dataframe(err_df, use_container_width=True)
+                    st.dataframe(err_df, width="stretch")
 
                 st.caption("Frontend log: artifacts/pipeline_runs/frontend.log")
                 st.caption(f"Pipeline log for this run: {selected_run_dir / 'pipeline.log'}")
@@ -1436,7 +1434,7 @@ def _render_classify_tab(
             if errors_path.exists():
                 st.subheader("Errors")
                 err_df = pd.read_csv(errors_path)
-                st.dataframe(err_df, use_container_width=True)
+                st.dataframe(err_df, width="stretch")
                 logger.warning("Run completed with errors | errors_csv=%s | count=%d", errors_path, len(err_df))
 
             st.caption(f"Frontend log: artifacts/pipeline_runs/frontend.log")
@@ -1512,7 +1510,7 @@ def main() -> None:
             if test_acc is not None:
                 metric_parts.append(f"Test accuracy: **{float(test_acc)*100:.2f}%**")
             if source == "autoresearch_log":
-                metric_parts.append("Source: `artifacts/autoresearch_log.csv`")
+                metric_parts.append("Source: `experiment_log.csv`")
             elif source == "run_summary":
                 metric_parts.append("Source: `artifacts/logs/run_summary.csv`")
             metric_parts.append(f"Label names: {label_names_csv}")

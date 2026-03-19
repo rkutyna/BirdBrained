@@ -18,7 +18,19 @@ ROOT = Path(__file__).resolve().parent.parent
 LOG_CSVS = {
     "subset98": ROOT / "artifacts" / "resnet50" / "subset98" / "experiment_log.csv",
     "full555": ROOT / "artifacts" / "resnet50" / "full555" / "experiment_log.csv",
+    "subset98_combined": ROOT / "artifacts" / "resnet50" / "subset98_combined" / "experiment_log.csv",
+    "base_combined": ROOT / "artifacts" / "resnet50" / "base_combined" / "experiment_log.csv",
+    "base_species": ROOT / "artifacts" / "resnet50" / "base_species" / "experiment_log.csv",
 }
+
+SPECIES_LABELS = {
+    "subset98": "98 species",
+    "full555": "555 species",
+    "subset98_combined": "98 species (combined)",
+    "base_combined": "404 base species (combined)",
+    "base_species": "404 base species",
+}
+
 STATUS_FILE = ROOT / "artifacts" / "autoresearch_status.json"
 PROGRESS_FILE = ROOT / "artifacts" / "autoresearch_progress.json"
 
@@ -80,7 +92,7 @@ def render() -> str:
     lines = []
     now = datetime.now().strftime("%H:%M:%S")
 
-    species_label = "98 species" if SPECIES_MODE == "subset98" else "555 species"
+    species_label = SPECIES_LABELS.get(SPECIES_MODE, SPECIES_MODE)
     lines.append(f"{BOLD}{'=' * 62}{RESET}")
     lines.append(f"{BOLD}  AUTORESEARCH MONITOR{RESET}  {CYAN}[{species_label}]{RESET}  {DIM}{now}{RESET}")
     lines.append(f"{BOLD}{'=' * 62}{RESET}")
@@ -88,7 +100,7 @@ def render() -> str:
     # --- Live status from autorun.py + per-epoch progress from train.py ---
     status = read_status()
     progress = read_progress()
-    has_progress = progress and progress.get("_age_sec", 999) < 300
+    has_progress = progress and progress.get("_age_sec", 999) < 900
 
     # Status file doesn't expire — it's valid for the whole iteration
     has_status = status is not None
@@ -138,7 +150,7 @@ def render() -> str:
             iter_label += f" / {total_iters}"
 
         if state == "training":
-            budget_est = 1800
+            budget_est = 900
             pct = min(100, iter_elapsed / budget_est * 100)
             bar_width = 30
             filled = int(bar_width * pct / 100)

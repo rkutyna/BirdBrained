@@ -237,10 +237,10 @@ def main() -> None:
         st.caption(f"Photo {idx + 1} of {len(display_images)}")
 
         nav_prev, nav_next = st.columns(2)
-        if nav_prev.button("← Prev", use_container_width=True, disabled=(idx == 0)):
+        if nav_prev.button("← Prev", width="stretch", disabled=(idx == 0)):
             st.session_state["idx"] = idx - 1
             st.rerun()
-        if nav_next.button("Next →", use_container_width=True, disabled=(idx == len(display_images) - 1)):
+        if nav_next.button("Next →", width="stretch", disabled=(idx == len(display_images) - 1)):
             st.session_state["idx"] = idx + 1
             st.rerun()
 
@@ -249,7 +249,7 @@ def main() -> None:
             unlabeled_indices = [i for i, img in enumerate(display_images) if img.name not in labels]
             if unlabeled_indices:
                 next_unlabeled = next((i for i in unlabeled_indices if i > idx), unlabeled_indices[0])
-                if st.button("Jump to next unlabeled →", use_container_width=True):
+                if st.button("Jump to next unlabeled →", width="stretch"):
                     st.session_state["idx"] = next_unlabeled
                     st.rerun()
             else:
@@ -264,7 +264,7 @@ def main() -> None:
                 data=labels_path.read_bytes(),
                 file_name=LABELS_FILENAME,
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
             st.caption(f"Saved at: {labels_path}")
         else:
@@ -289,7 +289,7 @@ def main() -> None:
 
         try:
             img = Image.open(current_image)
-            st.image(img, use_container_width=True)
+            st.image(img, width="stretch")
         except Exception as e:
             st.error(f"Could not open image: {e}")
 
@@ -319,14 +319,14 @@ def main() -> None:
 
         save_col, clear_col = st.columns([2, 1])
         with save_col:
-            if st.button("Save label", type="primary", use_container_width=True, disabled=not selected_species):
+            if st.button("Save label", type="primary", width="stretch", disabled=not selected_species):
                 save_label(folder, current_image.name, selected_species)
                 # Auto-advance to next image
                 if idx < len(display_images) - 1:
                     st.session_state["idx"] = idx + 1
                 st.rerun()
         with clear_col:
-            if st.button("Clear", use_container_width=True, disabled=(current_label is None)):
+            if st.button("Clear", width="stretch", disabled=(current_label is None)):
                 remove_label(folder, current_image.name)
                 st.rerun()
 
@@ -338,7 +338,7 @@ def main() -> None:
         recent_near = recent[max(0, idx - 3): idx + 4]
         if recent_near:
             recent_df = pd.DataFrame(recent_near, columns=["Filename", "Species"])
-            st.dataframe(recent_df, hide_index=True, use_container_width=True)
+            st.dataframe(recent_df, hide_index=True, width="stretch")
         else:
             st.caption("No labels saved yet.")
 
@@ -360,13 +360,13 @@ def main() -> None:
                 with col:
                     st.image(
                         thumb,
-                        use_container_width=True,
+                        width="stretch",
                         caption="★" if is_current else ("✓" if is_labeled else ""),
                     )
                     if st.button(
                         f"{i + 1}",
                         key=f"thumb_{i}",
-                        use_container_width=True,
+                        width="stretch",
                         type="primary" if is_current else "secondary",
                     ):
                         st.session_state["idx"] = i

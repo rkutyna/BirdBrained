@@ -694,10 +694,10 @@ li[role="option"][aria-selected="true"] {
     col_img1, col_img2 = st.columns(2)
     with col_img1:
         st.caption("Original image")
-        st.image(img, use_container_width=True)
+        st.image(img, width="stretch")
     with col_img2:
         st.caption("Model input (bbox crop -> resize+pad 240x240)")
-        st.image(cropped, use_container_width=True)
+        st.image(cropped, width="stretch")
 
     st.write(f"Ground truth: **{row['species']}**")
     st.write(f"Image path: `{row['image_path']}`")
@@ -711,7 +711,7 @@ li[role="option"][aria-selected="true"] {
     c1, c2 = st.columns(2)
     with c1:
         st.markdown(f"**Checkpoint A Top-5**  \n`{ckpt_a_name}`")
-        st.dataframe(pred_a, hide_index=True, use_container_width=True)
+        st.dataframe(pred_a, hide_index=True, width="stretch")
         st.write(
             "Top-1 correct:",
             bool(pred_a.iloc[0]["species"] == row["species"]),
@@ -719,7 +719,7 @@ li[role="option"][aria-selected="true"] {
 
     with c2:
         st.markdown(f"**Checkpoint B Top-5**  \n`{ckpt_b_name}`")
-        st.dataframe(pred_b, hide_index=True, use_container_width=True)
+        st.dataframe(pred_b, hide_index=True, width="stretch")
         st.write(
             "Top-1 correct:",
             bool(pred_b.iloc[0]["species"] == row["species"]),
@@ -764,7 +764,7 @@ li[role="option"][aria-selected="true"] {
 
         overall_df = pd.DataFrame(overall_rows)
         st.markdown("**Overall metrics**")
-        st.dataframe(overall_df, hide_index=True, use_container_width=True)
+        st.dataframe(overall_df, hide_index=True, width="stretch")
 
         st.markdown("**Per-species top-1 accuracy**")
         per_species_df = pd.concat(
@@ -803,7 +803,7 @@ li[role="option"][aria-selected="true"] {
         st.dataframe(
             per_species_df.sort_values(["model", "top1_acc"], na_position="last"),
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
 
 
