@@ -1,0 +1,3 @@
+Tried one throughput experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): `bs=128` with stage LRs raised to `3e-4/6e-5`, keeping the same two-stage unfreeze schedule. The run finished in `34675.8s` with `top1_val_acc=0.935633` and `top1_test_acc=0.936098`; the final log row also reports `status=keep` and `improved(delta=+0.0070)`.
+
+Because `0.935633 > 0.925077`, I kept the change and did not restore the pre-cycle version.
