@@ -38,10 +38,10 @@ from torchvision import models, transforms
 # ===================================================================
 
 # Wall-clock time budget for the entire run (training only, excludes eval)
-TIME_BUDGET_SEC = 14400  # set by autorun.py --time-budget
+TIME_BUDGET_SEC = 36000  # set by autorun.py --time-budget
 
 # Notes: the agent fills this in to describe what changed this run
-NOTES = "bs=64 + stage lrs 1.5e-4/3e-5 for 166k set"
+NOTES = "bs=128 + stage lrs 3e-4/6e-5 for 166k throughput"
 
 # --- Model ---
 BACKBONE = "resnet50"  # options: resnet50, efficientnet_b0, mobilenet_v3_large
@@ -51,7 +51,7 @@ DROPOUT = 0.4
 SPECIES_MODE = "base_combined"  # set by autorun.py --species
 
 # --- Data ---
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 NUM_WORKERS = 4
 
 # --- Training stages ---
@@ -68,15 +68,15 @@ NUM_WORKERS = 4
 # add layer2/layer1 stages for deeper fine-tuning with a lower LR.
 STAGES = [
     {
-        "name": "layer3+layer4+head",
-        "unfreeze": ("layer3.", "layer4.", "fc."),
-        "lr": 1.5e-4,
-        "max_epochs": 16,
+        "name": "layer4+head",
+        "unfreeze": ("layer4.", "fc."),
+        "lr": 3e-4,
+        "max_epochs": 4,
     },
     {
-        "name": "layer2+layer3+layer4+head",
-        "unfreeze": ("layer2.", "layer3.", "layer4.", "fc."),
-        "lr": 3e-5,
+        "name": "layer3+layer4+head",
+        "unfreeze": ("layer3.", "layer4.", "fc."),
+        "lr": 6e-5,
         "max_epochs": 16,
     },
 ]
