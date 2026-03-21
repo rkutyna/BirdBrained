@@ -1,3 +1,0 @@
-[train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) now keeps one change: `USE_TRIVIAL_AUGMENT = True` on the existing best 7200s single-stage baseline, with `NOTES = "TrivialAugment on best 7200s single-stage setup"`.
-
-`python train.py` finished in `7200.1s` with `16` completed epochs. Final recorded result was `top1_val_acc=0.919156` and `top1_test_acc=0.926116`, which improves over `0.911689`, so the change is kept. The logged analysis was `val_still_improving; hit_time_budget`.

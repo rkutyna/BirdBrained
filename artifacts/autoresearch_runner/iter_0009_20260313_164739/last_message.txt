@@ -1,3 +1,0 @@
-Tried one change in `train.py`: enabled `USE_TTA = True` and updated `NOTES` to `enable TTA`.
-
-Result: `top1_val_acc = 0.950257`, `top1_test_acc = 0.941358`, `training_seconds = 1800.4`, `total_epochs = 17`. This improved over the prior best `0.929674`, so the change was kept and `train.py` was not reverted.

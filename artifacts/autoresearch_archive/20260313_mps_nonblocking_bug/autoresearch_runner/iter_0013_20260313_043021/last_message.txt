@@ -1,5 +1,0 @@
-Experiment: changed only `train.py` to test `batch size 96, label smoothing 0.0, cosine schedule`, then ran `python train.py` once to completion on MPS.
-
-Result: the new last row in `artifacts/autoresearch_log.csv` is `20260313_043215_164510` with `top1_val_acc=0.977702` and `top1_test_acc=0.978738`, which did not beat the pre-cycle best `0.979417`.
-
-Decision: reverted `train.py` to its pre-cycle contents. The repository remains on the better configuration.

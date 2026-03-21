@@ -2,13 +2,8 @@ from __future__ import annotations
 
 import ast
 import logging
-import pickle
 import re
-import subprocess
 import sys
-import time
-from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -23,7 +18,6 @@ from PIL import Image
 import streamlit as st
 
 from inference.bird_pipeline import (
-    ALL_SPECIFIC_LABEL_NAMES_CSV,
     BASE_SPECIES_LABEL_NAMES_CSV,
     DEFAULT_LABEL_NAMES_CSV,
     PipelineConfig,
@@ -35,20 +29,6 @@ from inference.bird_pipeline import (
     run_inference_batch,
     classify_crops_batch,
 )
-from training.training_engine import (
-    LOGS_DIR,
-    QUEUE_JSON,
-    SUMMARY_CSV,
-    TrainingConfig,
-    update_queue_status,
-    add_to_queue,
-    cancel_running_job,
-    clear_finished_jobs,
-    get_progress,
-    get_training_log,
-    load_queue,
-    remove_from_queue,
-)
 
 
 COLOR_MAP = {
@@ -58,23 +38,12 @@ COLOR_MAP = {
 }
 
 _MODEL_DIR = Path("artifacts/resnet50")
-AUTORESEARCH_LOG_CSV = _MODEL_DIR / "subset98" / "experiment_log.csv"
-AUTORESEARCH_BEST_CKPT = _MODEL_DIR / "subset98" / "best.pt"
-AUTORESEARCH_LOG_CSV_FULL555 = _MODEL_DIR / "full555" / "experiment_log.csv"
-AUTORESEARCH_BEST_CKPT_FULL555 = _MODEL_DIR / "full555" / "best.pt"
 AUTORESEARCH_LOG_CSV_SUBSET98_COMBINED = _MODEL_DIR / "subset98_combined" / "experiment_log.csv"
 AUTORESEARCH_BEST_CKPT_SUBSET98_COMBINED = _MODEL_DIR / "subset98_combined" / "best.pt"
 AUTORESEARCH_LOG_CSV_BASE_COMBINED = _MODEL_DIR / "base_combined" / "experiment_log.csv"
 AUTORESEARCH_BEST_CKPT_BASE_COMBINED = _MODEL_DIR / "base_combined" / "best.pt"
 
-# Species mode definitions: (display_name, label_csv, checkpoint_keywords, best_ckpt)
 SPECIES_MODES = {
-    "98 species": {
-        "label_csv": DEFAULT_LABEL_NAMES_CSV,
-        "keywords": [],  # default bucket — no keyword match needed
-        "exclude_keywords": ["all_specific", "full555", "base_species", "base_combined", "subset98_combined"],
-        "best_ckpt": AUTORESEARCH_BEST_CKPT,
-    },
     "98 species (combined)": {
         "label_csv": DEFAULT_LABEL_NAMES_CSV,
         "keywords": ["subset98_combined"],
@@ -86,12 +55,6 @@ SPECIES_MODES = {
         "keywords": ["base_species", "base_combined"],
         "exclude_keywords": [],
         "best_ckpt": AUTORESEARCH_BEST_CKPT_BASE_COMBINED,
-    },
-    "555 species": {
-        "label_csv": ALL_SPECIFIC_LABEL_NAMES_CSV,
-        "keywords": ["all_specific", "full555"],
-        "exclude_keywords": [],
-        "best_ckpt": AUTORESEARCH_BEST_CKPT_FULL555,
     },
 }
 
@@ -242,7 +205,7 @@ def _checkpoint_stage_rank(ckpt_path: str) -> int:
 
 
 def _load_autoresearch_log(
-    autoresearch_log_csv: Path = AUTORESEARCH_LOG_CSV,
+    autoresearch_log_csv: Path,
 ) -> pd.DataFrame | None:
     if not autoresearch_log_csv.exists():
         return None
@@ -259,8 +222,6 @@ def _load_autoresearch_log(
 
 
 _CKPT_TO_LOG = {
-    str(AUTORESEARCH_BEST_CKPT): AUTORESEARCH_LOG_CSV,
-    str(AUTORESEARCH_BEST_CKPT_FULL555): AUTORESEARCH_LOG_CSV_FULL555,
     str(AUTORESEARCH_BEST_CKPT_SUBSET98_COMBINED): AUTORESEARCH_LOG_CSV_SUBSET98_COMBINED,
     str(AUTORESEARCH_BEST_CKPT_BASE_COMBINED): AUTORESEARCH_LOG_CSV_BASE_COMBINED,
 }
@@ -268,7 +229,6 @@ _CKPT_TO_LOG = {
 
 def _autoresearch_best_metrics(
     checkpoint_path: str,
-    autoresearch_log_csv: Path = AUTORESEARCH_LOG_CSV,
 ) -> dict[str, float | str] | None:
     log_csv = _CKPT_TO_LOG.get(checkpoint_path)
     if log_csv is None:
@@ -284,58 +244,6 @@ def _autoresearch_best_metrics(
         "val_acc": float(best_row["top1_val_acc"]),
         "test_acc": float(test_acc) if pd.notna(test_acc) else None,
     }
-
-
-@st.cache_data(show_spinner=False)
-def _autoresearch_checkpoint_sanity(
-    checkpoint_path: str,
-    label_names_csv: str,
-    sample_size: int = 32,
-) -> dict[str, float | str | bool] | None:
-    _ckpt_to_splits = {
-        str(AUTORESEARCH_BEST_CKPT): Path("artifacts/splits/subset98.pkl"),
-        str(AUTORESEARCH_BEST_CKPT_FULL555): Path("artifacts/splits/full555.pkl"),
-        str(AUTORESEARCH_BEST_CKPT_SUBSET98_COMBINED): Path("artifacts/splits/subset98_combined.pkl"),
-        str(AUTORESEARCH_BEST_CKPT_BASE_COMBINED): Path("artifacts/splits/base_combined.pkl"),
-    }
-    cache_path = _ckpt_to_splits.get(checkpoint_path)
-    if cache_path is None:
-        return None
-    if not cache_path.exists():
-        return None
-
-    try:
-        with cache_path.open("rb") as f:
-            data = pickle.load(f)
-        test_df = data.get("test_df")
-        if test_df is None or len(test_df) == 0:
-            return None
-
-        sample_df = test_df.head(min(sample_size, len(test_df))).copy()
-        device = get_default_device()
-        model, label_names = load_classifier(checkpoint_path, label_names_csv, device)
-
-        crops = []
-        for _, row in sample_df.iterrows():
-            img = Image.open(row["image_path"]).convert("RGB")
-            x, y, w, h = row["x"], row["y"], row["w"], row["h"]
-            crops.append(img.crop((int(x), int(y), int(x + w), int(y + h))))
-
-        preds = classify_crops_batch(crops, model, label_names, device)
-        pred_species = pd.Series([p["species"] for p in preds], dtype="string")
-        target_species = sample_df["target"].map(lambda idx: label_names[int(idx)]).astype("string")
-        acc = float((pred_species == target_species).mean())
-        dominant_species = str(pred_species.mode().iloc[0])
-        dominant_frac = float((pred_species == dominant_species).mean())
-        sane = acc >= 0.25 and dominant_frac <= 0.8
-        return {
-            "sane": sane,
-            "sample_acc": acc,
-            "dominant_species": dominant_species,
-            "dominant_frac": dominant_frac,
-        }
-    except Exception:
-        return None
 
 
 def _checkpoint_metrics(
@@ -855,405 +763,6 @@ def list_previous_run_dirs(root: Path = Path("artifacts/pipeline_runs")) -> list
     return runs
 
 
-# ---------------------------------------------------------------------------
-# Training tab helpers
-# ---------------------------------------------------------------------------
-_SWEEP_PARAMS = {
-    "stage1_lr": "Stage 1 LR",
-    "stage2_lr": "Stage 2 LR",
-    "stage3_lr": "Stage 3 LR",
-    "stage1_epochs": "Stage 1 Epochs",
-    "stage2_epochs": "Stage 2 Epochs",
-    "stage3_epochs": "Stage 3 Epochs",
-    "weight_decay": "Weight Decay",
-    "label_smoothing": "Label Smoothing",
-    "batch_size": "Batch Size",
-    "seed": "Seed",
-    "crop_scale_min": "Crop Scale Min",
-    "jitter_brightness": "Jitter Brightness",
-    "jitter_hue": "Jitter Hue",
-    "random_erasing_p": "Random Erasing P",
-}
-
-
-def _generate_sweep_values(start: float, stop: float, multiplier: float) -> list[float]:
-    """Generate start, start*mult, start*mult^2, ... while in range [start, stop] (or [stop, start] if mult<1)."""
-    if multiplier <= 0 or multiplier == 1:
-        return [start]
-    values = []
-    v = start
-    if multiplier > 1:
-        while v <= stop + 1e-12:
-            values.append(v)
-            v *= multiplier
-    else:
-        while v >= stop - 1e-12:
-            values.append(v)
-            v *= multiplier
-    return values if values else [start]
-
-
-def _launch_next_job() -> bool:
-    """Start the next pending job if none is running. Returns True if a job was launched."""
-    queue = load_queue()
-    running = [j for j in queue if j["status"] == "running"]
-    pending = [j for j in queue if j["status"] == "pending"]
-
-    # Defense: if a job is stuck as "running" but the subprocess already exited
-    # (e.g. killed by SIGINT before the KeyboardInterrupt handler could update the
-    # queue), mark it failed so the queue doesn't stay permanently blocked.
-    proc = st.session_state.get("_training_proc")
-    if running and proc is not None and proc.poll() is not None:
-        for stuck_job in running:
-            update_queue_status(stuck_job["id"], status="failed",
-                                 error="Process exited unexpectedly (exit code: "
-                                       f"{proc.poll()})",
-                                 completed_at=datetime.now().isoformat(timespec="seconds"))
-        st.session_state.pop("_training_proc", None)
-        st.session_state.pop("_training_log_f", None)
-        running = []
-
-    if running or not pending:
-        return False
-
-    # Check if our stored subprocess is still alive
-    proc = st.session_state.get("_training_proc")
-    if proc is not None and proc.poll() is None:
-        return False  # still running
-
-    next_job = pending[0]
-    job_id = next_job["id"]
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOGS_DIR / f"training_{job_id}.log"
-    log_f = open(log_path, "w")
-    proc = subprocess.Popen(
-        [sys.executable, "-u", "training/training_engine.py", "--job-id", job_id],
-        stdout=log_f,
-        stderr=log_f,
-    )
-    st.session_state["_training_proc"] = proc
-    st.session_state["_training_log_f"] = log_f
-    return True
-
-
-def _config_form(prefix: str = "run") -> TrainingConfig | None:
-    """Render a TrainingConfig form and return the config, or None if invalid."""
-    run_label = st.text_input("Run label", value="manual", key=f"{prefix}_label",
-                              help="Short name for this run, used in checkpoint filenames.")
-    species_mode = st.radio("Species mode", options=["98", "555"], index=0,
-                             key=f"{prefix}_species",
-                             help="98 = target species subset | 555 = all NABirds-specific classes")
-
-    c1, c2, c3 = st.columns(3)
-    seed = c1.number_input("Seed", value=42, step=1, key=f"{prefix}_seed")
-    batch_size = c2.number_input("Batch size", value=32, min_value=1, step=8, key=f"{prefix}_bs")
-    val_fraction = c3.number_input("Val fraction", value=0.10, min_value=0.01, max_value=0.5,
-                                    step=0.01, key=f"{prefix}_vf")
-
-    _stage_labels = {
-        1: "Head (fc only)",
-        2: "Layer 4 + Head",
-        3: "Layer 3 + Layer 4 + Head",
-    }
-    stages_to_run = st.multiselect(
-        "Layers to train (cumulative, head → deeper)",
-        options=[1, 2, 3],
-        default=[1, 2, 3],
-        format_func=lambda s: _stage_labels[s],
-        key=f"{prefix}_stages",
-    )
-    if not stages_to_run:
-        st.warning("Select at least one training stage.")
-        return None
-
-    with st.expander("Per-stage settings", expanded=True):
-        sc1, sc2, sc3 = st.columns(3)
-        with sc1:
-            st.markdown("**Head (fc only)**")
-            st.caption("Trains classification head, backbone frozen")
-            s1_ep = st.number_input("Epochs", value=20, min_value=1, key=f"{prefix}_s1ep")
-            s1_lr = st.number_input("LR", value=1e-3, format="%.2e", key=f"{prefix}_s1lr")
-        with sc2:
-            st.markdown("**Layer 4 + Head**")
-            st.caption("Unfreezes ResNet layer4 + head")
-            s2_ep = st.number_input("Epochs", value=10, min_value=1, key=f"{prefix}_s2ep")
-            s2_lr = st.number_input("LR", value=2e-4, format="%.2e", key=f"{prefix}_s2lr")
-        with sc3:
-            st.markdown("**Layer 3 + Layer 4 + Head**")
-            st.caption("Unfreezes layer3, layer4 + head")
-            s3_ep = st.number_input("Epochs", value=8, min_value=1, key=f"{prefix}_s3ep")
-            s3_lr = st.number_input("LR", value=1e-4, format="%.2e", key=f"{prefix}_s3lr")
-
-    with st.expander("Shared training params"):
-        p1, p2 = st.columns(2)
-        wd = p1.number_input("Weight decay", value=2e-4, format="%.2e", key=f"{prefix}_wd")
-        ls = p2.number_input("Label smoothing", value=0.0, min_value=0.0, max_value=0.5,
-                              step=0.01, key=f"{prefix}_ls")
-
-    with st.expander("Augmentation"):
-        a1, a2 = st.columns(2)
-        cs_min = a1.number_input("Crop scale min", value=0.6, min_value=0.1, max_value=1.0,
-                                   step=0.05, key=f"{prefix}_csmin")
-        cs_max = a2.number_input("Crop scale max", value=1.0, min_value=0.1, max_value=1.0,
-                                   step=0.05, key=f"{prefix}_csmax")
-        b1, b2, b3, b4 = st.columns(4)
-        j_br = b1.number_input("Jitter brightness", value=0.3, min_value=0.0, step=0.05, key=f"{prefix}_jbr")
-        j_co = b2.number_input("Jitter contrast", value=0.3, min_value=0.0, step=0.05, key=f"{prefix}_jco")
-        j_sa = b3.number_input("Jitter saturation", value=0.3, min_value=0.0, step=0.05, key=f"{prefix}_jsa")
-        j_hu = b4.number_input("Jitter hue", value=0.1, min_value=0.0, max_value=0.5, step=0.01,
-                                 key=f"{prefix}_jhu")
-        e1, e2 = st.columns(2)
-        er_p = e1.number_input("Erasing P", value=0.3, min_value=0.0, max_value=1.0, step=0.05,
-                                 key=f"{prefix}_erp")
-        er_s = e2.number_input("Erasing scale max", value=0.2, min_value=0.01, max_value=0.5,
-                                 step=0.01, key=f"{prefix}_ers")
-
-    return TrainingConfig(
-        run_label=run_label,
-        species_mode=species_mode,
-        seed=int(seed),
-        batch_size=int(batch_size),
-        val_fraction=float(val_fraction),
-        stages_to_run=list(stages_to_run),
-        stage1_epochs=int(s1_ep), stage1_lr=float(s1_lr),
-        stage2_epochs=int(s2_ep), stage2_lr=float(s2_lr),
-        stage3_epochs=int(s3_ep), stage3_lr=float(s3_lr),
-        weight_decay=float(wd), label_smoothing=float(ls),
-        crop_scale_min=float(cs_min), crop_scale_max=float(cs_max),
-        jitter_brightness=float(j_br), jitter_contrast=float(j_co),
-        jitter_saturation=float(j_sa), jitter_hue=float(j_hu),
-        random_erasing_p=float(er_p), random_erasing_scale_max=float(er_s),
-    )
-
-
-def _render_queue_dashboard() -> bool:
-    """Render running job progress + queue table. Returns True if a job is actively running."""
-    queue = load_queue()
-
-    # Status counts
-    counts = {s: sum(1 for j in queue if j["status"] == s)
-              for s in ("pending", "running", "done", "failed", "cancelled")}
-    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
-    mc1.metric("Pending", counts["pending"])
-    mc2.metric("Running", counts["running"])
-    mc3.metric("Done", counts["done"])
-    mc4.metric("Failed", counts["failed"])
-    mc5.metric("Cancelled", counts["cancelled"])
-
-    running_jobs = [j for j in queue if j["status"] == "running"]
-    any_running = bool(running_jobs)
-
-    # Live progress for running job
-    if running_jobs:
-        job = running_jobs[0]
-        job_id = job["id"]
-        progress = get_progress(job_id)
-        st.markdown(f"**Running job:** `{job_id}` — label: `{job['config'].get('run_label', '?')}`")
-
-        if progress:
-            status = progress.get("status", "?")
-            stage = progress.get("stage", 0)
-            epoch = progress.get("epoch", 0)
-            total_epochs = progress.get("total_epochs", 1)
-            phase = progress.get("phase")
-            batch = progress.get("batch", 0)
-            total_batches = progress.get("total_batches", 0)
-            train_acc = progress.get("train_acc")
-            val_acc = progress.get("val_acc")
-            best_val = progress.get("best_val_acc")
-
-            if status == "loading_data":
-                st.info("Loading dataset...")
-            elif status in ("running", "starting"):
-                # Smooth progress: completed epochs + within-epoch batch progress
-                if epoch == 0 and not phase:
-                    frac = 0.0
-                    label = f"Stage {stage} | Preparing..."
-                elif phase and total_batches > 0:
-                    batch_frac = batch / total_batches
-                    # Training ~80% of epoch wall time, validation ~20%
-                    if phase == "train":
-                        epoch_progress = batch_frac * 0.8
-                    else:
-                        epoch_progress = 0.8 + batch_frac * 0.2
-                    frac = ((epoch - 1) + epoch_progress) / max(1, total_epochs)
-                    frac = min(max(frac, 0.0), 1.0)
-                    phase_label = "Training" if phase == "train" else "Validating"
-                    label = (
-                        f"Stage {stage} | Epoch {epoch}/{total_epochs}"
-                        f" — {phase_label} ({batch}/{total_batches})"
-                    )
-                else:
-                    # Epoch just completed (phase=None)
-                    frac = epoch / max(1, total_epochs)
-                    label = f"Stage {stage} | Epoch {epoch}/{total_epochs}"
-
-                st.progress(frac, text=label)
-                pm1, pm2, pm3 = st.columns(3)
-                if train_acc is not None:
-                    pm1.metric("Train acc", f"{train_acc:.4f}")
-                if val_acc is not None:
-                    pm2.metric("Val acc", f"{val_acc:.4f}")
-                if best_val is not None:
-                    pm3.metric("Best val acc", f"{best_val:.4f}")
-            else:
-                st.info(f"Status: {status}")
-
-        if st.button("Cancel running job", key="cancel_running"):
-            cancel_running_job(job_id)
-            st.warning(f"Cancel signal sent to job {job_id}. It will stop after the current epoch.")
-
-        with st.expander("Training log (tail)"):
-            log_text = get_training_log(job_id)
-            if log_text:
-                # Show last 60 lines
-                lines = log_text.splitlines()
-                st.code("\n".join(lines[-60:]), language=None)
-            else:
-                st.caption("No log output yet.")
-
-    # Queue table
-    st.markdown("### Queue")
-    if not queue:
-        st.caption("Queue is empty.")
-    else:
-        for job in queue:
-            job_id = job["id"]
-            status = job["status"]
-            cfg = job.get("config", {})
-            label = cfg.get("run_label", "?")
-            species = cfg.get("species_mode", "?")
-            stages = cfg.get("stages_to_run", [])
-            added = job.get("added_at", "")[:16]
-
-            status_icon = {"pending": "⏳", "running": "🔄", "done": "✅",
-                           "failed": "❌", "cancelled": "🚫"}.get(status, "?")
-
-            col_info, col_btn = st.columns([5, 1])
-            with col_info:
-                st.markdown(
-                    f"{status_icon} `{job_id}` &nbsp; **{label}** &nbsp; "
-                    f"species={species} &nbsp; stages={stages} &nbsp; added={added}",
-                    unsafe_allow_html=True,
-                )
-                if status == "failed":
-                    err = job.get("error", "")
-                    if err:
-                        st.caption(f"Error: {err[:120]}")
-            with col_btn:
-                if status == "pending":
-                    if st.button("Remove", key=f"rm_{job_id}"):
-                        remove_from_queue(job_id)
-                        st.rerun()
-
-    if counts["done"] + counts["failed"] + counts["cancelled"] > 0:
-        if st.button("Clear finished jobs"):
-            n = clear_finished_jobs()
-            st.success(f"Removed {n} finished job(s).")
-            st.rerun()
-
-    return any_running
-
-
-def render_training_tab() -> None:
-    st.header("Training Queue")
-
-    # Try to auto-start the next pending job
-    launched = _launch_next_job()
-    if launched:
-        st.rerun()  # pick up the new "running" status immediately
-
-    any_running = _render_queue_dashboard()
-
-    # Auto-refresh while a job is running, or while a subprocess is active but
-    # hasn't updated the queue file to "running" yet (covers the launch gap).
-    proc = st.session_state.get("_training_proc")
-    proc_active = proc is not None and proc.poll() is None
-    if any_running or proc_active:
-        time.sleep(3)
-        st.rerun()
-
-    st.divider()
-
-    # ---- Add job ----
-    add_tab_single, add_tab_sweep = st.tabs(["Add Single Run", "Add Parameter Sweep"])
-
-    with add_tab_single:
-        with st.form("add_single_run"):
-            cfg = _config_form(prefix="single")
-            submitted = st.form_submit_button("Add to Queue")
-            if submitted and cfg is not None:
-                job_id = add_to_queue(cfg)
-                st.success(f"Job `{job_id}` added to queue.")
-                st.rerun()
-
-    with add_tab_sweep:
-        st.markdown("Vary one parameter multiplicatively across a range. All other params come from the base config below.")
-
-        sweep_param = st.selectbox(
-            "Parameter to sweep",
-            options=list(_SWEEP_PARAMS.keys()),
-            format_func=lambda k: _SWEEP_PARAMS[k],
-            key="sweep_param",
-        )
-
-        sc1, sc2, sc3 = st.columns(3)
-        sweep_start = sc1.number_input("Start value", value=1e-3, format="%.2e", key="sweep_start")
-        sweep_stop = sc2.number_input("Stop value", value=1e-5, format="%.2e", key="sweep_stop")
-        sweep_mult = sc3.number_input("Multiplier (×)", value=0.1, format="%.4f", key="sweep_mult",
-                                       help="Each step = previous × multiplier. Use <1 to decrease, >1 to increase.")
-
-        preview_vals = _generate_sweep_values(float(sweep_start), float(sweep_stop), float(sweep_mult))
-        st.caption(f"Preview ({len(preview_vals)} runs): {[f'{v:.4g}' for v in preview_vals]}")
-
-        with st.form("add_sweep"):
-            st.markdown("**Base config** (the non-swept parameters):")
-            base_cfg = _config_form(prefix="sweep_base")
-            sweep_submitted = st.form_submit_button(f"Add {len(preview_vals)} sweep jobs to Queue")
-            if sweep_submitted and base_cfg is not None:
-                added_ids = []
-                for val in preview_vals:
-                    cfg_dict = asdict(base_cfg)
-                    cfg_dict[sweep_param] = val
-                    cfg_dict["run_label"] = f"{base_cfg.run_label}_{sweep_param}_{val:.4g}"
-                    job_cfg = TrainingConfig(**cfg_dict)
-                    jid = add_to_queue(job_cfg)
-                    added_ids.append(jid)
-                st.success(f"Added {len(added_ids)} sweep jobs: {added_ids}")
-                st.rerun()
-
-    st.divider()
-
-    # ---- Run History ----
-    st.header("Run History")
-    if not SUMMARY_CSV.exists():
-        st.caption("No run history yet (artifacts/logs/run_summary.csv not found).")
-    else:
-        try:
-            df = pd.read_csv(SUMMARY_CSV)
-            df["test_acc"] = pd.to_numeric(df["test_acc"], errors="coerce")
-            df["best_val_acc"] = pd.to_numeric(df["best_val_acc"], errors="coerce")
-
-            filter_col, sort_col = st.columns(2)
-            stage_filter = filter_col.selectbox(
-                "Filter by stage",
-                options=["all"] + sorted(df["stage"].dropna().unique().tolist()),
-                key="hist_stage_filter",
-            )
-            show_df = df if stage_filter == "all" else df[df["stage"] == stage_filter]
-
-            st.dataframe(
-                show_df.sort_values("test_acc", ascending=False, na_position="last")[
-                    ["run_label", "stage", "test_acc", "best_val_acc", "num_epochs",
-                     "lr", "weight_decay", "label_smoothing", "checkpoint_path", "timestamp"]
-                ].reset_index(drop=True),
-                width="stretch",
-                hide_index=True,
-            )
-        except Exception as e:
-            st.error(f"Could not load run history: {e}")
-
-
 def _render_classify_tab(
     tab,
     *,
@@ -1450,8 +959,6 @@ def main() -> None:
     apply_css()
     logger = build_app_logger()
 
-    tab_classify, tab_training = st.tabs(["Classify", "Training"])
-
     # ---- Sidebar ----
     run_mode = "New inference"
     selected_run_dir: Path | None = None
@@ -1481,10 +988,10 @@ def main() -> None:
 
         all_ckpts = list_classifier_checkpoints("artifacts/resnet50")
         if not all_ckpts:
-            st.error("No .pt classifier checkpoints found in artifacts/")
-            # Still render training tab so user can train a model
-            with tab_training:
-                render_training_tab()
+            st.error(
+                "No classifier checkpoints found. "
+                "Run `python download_models.py` to download from HuggingFace Hub."
+            )
             return
 
         ckpts = _filter_checkpoints_by_mode(all_ckpts, species_mode)
@@ -1499,7 +1006,6 @@ def main() -> None:
             index=ckpts.index(default_ckpt),
         )
         ckpt_metrics = _checkpoint_metrics(classifier_checkpoint)
-        sanity = _autoresearch_checkpoint_sanity(classifier_checkpoint, str(label_names_csv))
         if ckpt_metrics is not None:
             metric_parts = []
             val_acc = ckpt_metrics.get("val_acc")
@@ -1517,13 +1023,6 @@ def main() -> None:
             st.caption(" | ".join(metric_parts))
         else:
             st.caption(f"Label names: {label_names_csv}")
-        if sanity is not None and not bool(sanity.get("sane")):
-            st.warning(
-                "This autoresearch checkpoint failed a held-out sanity check and may be corrupted. "
-                f"Sample acc={float(sanity['sample_acc'])*100:.1f}% | "
-                f"dominant prediction={sanity['dominant_species']} ({float(sanity['dominant_frac'])*100:.1f}%). "
-                "Select a different checkpoint and retrain autoresearch after the MPS transfer fix."
-            )
         yolo_weights = st.text_input("YOLO weights", value="yolo11n.pt")
         yolo_conf = st.slider("YOLO confidence threshold", min_value=0.01, max_value=0.95, value=0.25, step=0.01)
         device = st.selectbox("Device", options=["auto", get_default_device(), "cpu", "cuda", "mps"], index=0)
@@ -1561,11 +1060,8 @@ def main() -> None:
 
         run_clicked = st.button("Run Inference", type="primary", disabled=(run_mode != "New inference"))
 
-    # ---- Classify tab ----
-    # In its own function so `return` statements inside don't exit main(),
-    # ensuring the Training tab always renders below.
     _render_classify_tab(
-        tab_classify,
+        st.container(),
         run_mode=run_mode,
         selected_run_dir=selected_run_dir,
         label_names_csv=label_names_csv,
@@ -1583,12 +1079,6 @@ def main() -> None:
         run_clicked=run_clicked,
         logger=logger,
     )
-
-    # ---- Training tab ----
-    # Rendered last so its st.rerun() calls (for live progress) don't prevent
-    # the sidebar or classify tab from rendering in the same script pass.
-    with tab_training:
-        render_training_tab()
 
 
 if __name__ == "__main__":

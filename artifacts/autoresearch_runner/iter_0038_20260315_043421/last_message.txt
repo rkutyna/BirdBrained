@@ -1,3 +1,0 @@
-Changed only the configuration in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py#L41): `NUM_WORKERS` from `2` to `4`, with `NOTES = "NUM_WORKERS=4 for more stage3 throughput"`.
-
-`python train.py` finished cleanly. Final result was `top1_val_acc=0.900618`, `top1_test_acc=0.904095`, `total_epochs=9`, `training_seconds=3600.2`, and the last log row in `artifacts/autoresearch_log_full555.csv` recorded `status=keep`. Since `0.900618 > 0.894439`, I kept the change.

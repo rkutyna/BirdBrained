@@ -1,3 +1,0 @@
-- Tried one coupled regularization experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): `MIXUP_ALPHA=0.2` and `LABEL_SMOOTHING=0.0`, with `NOTES="Mixup alpha=0.2, no label smoothing"`. Hypothesis: lighter vicinal regularization than CutMix might improve generalization on full555 without changing stage structure.
-- Result from the structured summary / last log row: `top1_val_acc=0.882338`, `top1_test_acc=0.890204`, `total_epochs=8`, analysis `val_still_improving; hit_time_budget; REGRESSED(delta=-0.0283)`.
-- Decision: revert. `0.882338` did not beat `0.900618`, so [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) was restored to its pre-cycle contents and verified clean against the backup.

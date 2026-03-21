@@ -1,3 +1,0 @@
-Tried one experiment: switched the current best 7200s setup to a per-stage cosine scheduler (`NOTES: "cosine schedule on 7200s stage3 setup"`). The run finished at `top1_val_acc=0.897013`, `top1_test_acc=0.910167`, `17` epochs, with analysis `mild_overfit; plateau; hit_time_budget`; the last logged row is in [artifacts/autoresearch_log_full555.csv](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log_full555.csv).
-
-Because `0.897013` did not beat `0.906025`, I reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents.

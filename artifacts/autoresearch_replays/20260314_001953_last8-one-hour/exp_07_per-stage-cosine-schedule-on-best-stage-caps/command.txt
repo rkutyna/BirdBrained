@@ -1,1 +1,0 @@
-/Users/rkutyna/Documents/GitHub/capstone/.venv/bin/python train.py

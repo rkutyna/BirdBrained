@@ -1,3 +1,0 @@
-Tried one experiment: lower stage3 LR from `7.5e-5` to `6e-5` while keeping the successful 7200s schedule, testing whether slower late-stage updates would beat the current best.
-
-Result: `top1_val_acc=0.898558`, `top1_test_acc=0.907080`, `total_epochs=17`, `status=discard`. That did not beat `0.906025`, so the change was reverted and [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) is restored to the prior best config (`stage3 lr=7.5e-5 + cap=15 for 7200s`).

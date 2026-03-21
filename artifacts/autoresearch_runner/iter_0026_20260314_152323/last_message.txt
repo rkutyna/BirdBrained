@@ -1,3 +1,0 @@
-Tried one experiment in [train.py#L44](/Users/rkutyna/Documents/GitHub/capstone/train.py#L44) and [train.py#L60](/Users/rkutyna/Documents/GitHub/capstone/train.py#L60): cap `stage1` at 2 epochs instead of 3 to free more budget for `stage3`, with `NOTES = "cap stage1 at 2 to extend stage3"`.
-
-`python train.py` finished cleanly on MPS and logged `top1_val_acc=0.839598`, `top1_test_acc=0.846676`, `total_epochs=9`, which beats `0.831102` by `+0.008496`. Decision: keep. The run was appended to [artifacts/autoresearch_log_full555.csv](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log_full555.csv).

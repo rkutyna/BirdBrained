@@ -1,3 +1,0 @@
-Tried one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): disabled `LLRD_DECAY` while keeping the current best skip-stage1 setup, with `NOTES = "disable LLRD on skip stage1 setup"`.
-
-`python train.py` finished and the structured summary reported `top1_val_acc = 0.893924`, up from `0.893666`, with `top1_test_acc = 0.897201`. Decision: keep the change. The log’s `analysis` string says `REGRESSED`, but that is based on the in-training non-TTA best epoch metric; the final TTA validation score is the keep/revert target and it improved.

@@ -1,3 +1,0 @@
-Tried one change in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): enabled `LLRD_DECAY = 0.8` with the hypothesis that layer-wise LR decay would protect earlier ResNet features during stage 3 unfreezing and lift `top1_val_acc`.
-
-`python train.py` finished and logged `top1_val_acc = 0.949400`, `top1_test_acc = 0.938957`, `training_seconds = 1800.3` in [artifacts/autoresearch_log.csv](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log.csv). That did not beat `0.951973`, so the change was reverted and [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) is back on the pre-cycle GeM+TTA configuration.

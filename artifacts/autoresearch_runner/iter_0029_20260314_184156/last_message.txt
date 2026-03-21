@@ -1,3 +1,0 @@
-Tried one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): reduced stage 1 `max_epochs` from `2` to `1` and set `NOTES = "cap stage1 at 1 to extend stage3"`.
-
-Result from the recorded run: `top1_val_acc = 0.867662`, `top1_test_acc = 0.867874`, `training_seconds = 3600.4`, `status = keep`. The last log row in `artifacts/autoresearch_log_full555.csv` confirms it beat the prior best `0.855819`, so the change was kept.

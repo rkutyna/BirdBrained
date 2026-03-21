@@ -1,25 +1,25 @@
-# NABirds dataset
+# Model checkpoints (download via: python download_models.py)
+/artifacts/resnet50/**
+!/artifacts/resnet50/subset98_combined/
+!/artifacts/resnet50/subset98_combined/experiment_log.csv
+!/artifacts/resnet50/base_combined/
+!/artifacts/resnet50/base_combined/experiment_log.csv
+
+# Datasets (local only, not distributed)
 /NABirds Dataset/
-
-# Birdsnap dataset
 /Birdsnap Dataset/
-
-# iNaturalist dataset
 /iNaturalist Dataset/
+/data/
 
 # Pipeline/log outputs
 /artifacts/logs/
 /artifacts/pipeline_runs/
 
-.venv
-
-__pycache__
-
+# Photos
 *.jpg
 *.jpeg
 
-
-# Python caches/build
+# Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -27,20 +27,18 @@ __pycache__/
 .ruff_cache/
 .ipynb_checkpoints/
 
-# Virtual env + local env files
+# Virtual env
 .venv/
 .env
 .env.*
 
-# OS / editor noise
+# OS / editor
 .DS_Store
 .vscode/
 .idea/
 
 # Logs
 *.log
-/artifacts/resnet50/
-/data/
 
-
+# Claude
 .claude/

@@ -1,1 +1,0 @@
-codex exec --color never -C /Users/rkutyna/Documents/GitHub/capstone -o /Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_runner/iter_0025_20260314_141755/last_message.txt --dangerously-bypass-approvals-and-sandbox -

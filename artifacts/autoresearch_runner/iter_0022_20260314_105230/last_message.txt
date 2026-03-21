@@ -1,3 +1,0 @@
-`artifacts/autoresearch_log_full555.csv` was missing, so I used `artifacts/logs/run_summary.csv` for context and ran one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): enable layer-wise LR decay with `LLRD_DECAY = 0.8` and set `NOTES = "LLRD decay=0.8"`.
-
-`python train.py` finished on MPS and logged `top1_val_acc = 0.796859`, `top1_test_acc = 0.808705`, with analysis `val_still_improving; hit_time_budget`. Since `0.796859 > 0.000000`, the result improved, so I kept the change in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py). The new row is in [artifacts/autoresearch_log_full555.csv](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log_full555.csv).

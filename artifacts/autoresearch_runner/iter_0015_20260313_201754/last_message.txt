@@ -1,3 +1,0 @@
-Read `artifacts/autoresearch_log.csv` first and used the current best run (`0.956261`, `cap stage2 at 5 to extend stage3`) as the baseline. The single experiment I tested in `train.py` was: shorten Stage 2 further from 5 epochs to 4, with `NOTES = "cap stage2 at 4 to extend stage3"`, on the hypothesis that the best run still needed more Stage 3 time.
-
-`python train.py` completed successfully on MPS. The result was `top1_val_acc=0.945969` and `top1_test_acc=0.935528`, with analysis `hit_time_budget; REGRESSED(delta=-0.0111); train_acc=0.9745,val_acc=0.9417,best_at_epoch_14/16`. That did not beat `0.956261`, so I reverted `train.py` to its pre-cycle contents. I also verified the revert: `diff` against the backup was empty.

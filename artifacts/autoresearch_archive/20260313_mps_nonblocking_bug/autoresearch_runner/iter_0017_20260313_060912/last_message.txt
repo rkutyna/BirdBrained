@@ -1,5 +1,0 @@
-Single experiment: lowered `RANDOM_ERASING_P` from `0.3` to `0.15` in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py), with `NOTES` updated to match, then ran `python train.py` to completion on MPS.
-
-Result: the new row in [artifacts/autoresearch_log.csv](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log.csv) logged `top1_val_acc=0.979417` and `top1_test_acc=0.978738`, which ties but does not exceed the pre-cycle best `0.979417`.
-
-Decision: reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents and verified the restore.

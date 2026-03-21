@@ -1,3 +1,0 @@
-Single experiment: changed the head dropout in `train.py` from `0.4` to `0.5` and updated `NOTES` to `batch size 96, label smoothing 0.0, dropout 0.5`, keeping the rest of the best-known head-only baseline unchanged.
-
-`python train.py` ran on Apple MPS and logged run `20260313_045815_f89269` with `top1_val_acc=0.977702` and `top1_test_acc=0.973937`. That did not beat the pre-cycle best `0.979417`, so `train.py` was reverted to its exact pre-cycle contents.

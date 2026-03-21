@@ -1,3 +1,0 @@
-Experiment: in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py), I reduced `head_only` from 6 to 5 epochs and updated `NOTES` to `cap stage1 at 5 epochs to extend stage2`, with the hypothesis that freeing one more epoch for `layer4+head` would improve validation accuracy.
-
-`python train.py` finished as run `20260313_110806_c6331b` and appended `top1_val_acc=0.904803`, `top1_test_acc=0.896433` to [artifacts/autoresearch_log.csv](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log.csv). Since `0.904803 < 0.906518`, the run did not improve on the pre-cycle best, so I restored [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents and verified it matches the backup exactly.

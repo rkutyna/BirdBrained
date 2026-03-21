@@ -1,5 +1,0 @@
-[train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) now tests `stage3 cap=7 before layer2 on 38k train` by setting the first stage `max_epochs` to `7` and updating `NOTES`.
-
-Result: `top1_val_acc=0.971698`, `top1_test_acc=0.974966`, `training_seconds=7200.2`, with analysis `val_still_improving; plateau(range=0.0043); hit_time_budget; flat(delta=-0.0026)`. The appended row in [artifacts/autoresearch_log_subset98_combined.csv](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log_subset98_combined.csv) is marked `discard` because it did not beat the current subset98-combined best `0.974271`.
-
-Keep/revert decision: kept, because the user-specified threshold was `0.963122` and this run exceeded it by `0.008576`.

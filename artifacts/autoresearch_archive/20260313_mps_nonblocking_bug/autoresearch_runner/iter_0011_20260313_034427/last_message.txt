@@ -1,3 +1,0 @@
-One experiment was run: switched the current best baseline from `adam` to `adamw` while keeping `batch size 96`, `label smoothing 0.0`, and the existing augmentation/time-budget setup. The run completed on Apple MPS and logged `top1_val_acc = 0.977702` with `top1_test_acc = 0.978738`.
-
-That did not improve on the pre-cycle best `0.979417`, so `train.py` was restored to its pre-cycle contents. The new log row was kept in `artifacts/autoresearch_log.csv`, and no second experiment was started.

@@ -1,3 +1,0 @@
-Tried one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): capped stage 2 at 6 epochs so the 20-minute run could reach stage 3. I also normalized `TIME_BUDGET_SEC` back to `1200` for comparability, since the file had drifted to `2400` while the logged baseline was on `1200`.
-
-Result: the run reached stage 3 for 1 epoch and finished at `top1_val_acc=0.929674` and `top1_test_acc=0.914609`, which beats `0.927959`. Decision: keep.

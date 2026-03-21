@@ -1,5 +1,0 @@
-Tried one experiment: enabled focal loss with `gamma=1.5` while keeping the current best stage schedule unchanged.
-
-Result: `top1_val_acc=0.944254` and `top1_test_acc=0.937243`, which is below the pre-cycle best `0.956261`. The run logged `val_still_improving; hit_time_budget; REGRESSED(delta=-0.0146)`.
-
-Decision: revert. `train.py` was restored to its exact pre-cycle contents, and the discarded run is recorded in `artifacts/autoresearch_log.csv`.

@@ -1,3 +1,0 @@
-Tried one experiment on [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): switched the current best `TrivialAugment` single-stage setup to a `step` LR schedule with the decay at epoch 10. The run finished at `top1_val_acc=0.917611` and `top1_test_acc=0.924264`, with analysis `val_still_improving; hit_time_budget; REGRESSED(delta=-0.0124)`.
-
-Because `0.917611` did not beat the current best `0.919156`, I reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents. Keep/revert decision: `revert`.

@@ -1,3 +1,0 @@
-Tried one experiment: reduced `stage1` from 6 to 5 epochs and set `NOTES` to `cap stage1 at 5 to extend stage3`, based on the best run still improving at the time budget.
-
-Result: `top1_val_acc=0.947684` (`top1_test_acc=0.938957`), which is below the prior best `0.956261`. Decision: reverted `train.py` to its exact pre-cycle contents; the file matches the saved backup.

@@ -1,0 +1,6 @@
+run_id,timestamp,top1_val_acc,top1_test_acc,peak_memory_mb,total_epochs,training_seconds,time_budget_sec,status,notes,analysis
+20260318_232400_2616cc,2026-03-19T01:24:55,0.974271,0.973594,589.1,12,7200.2,7200,keep,stage3 cap=6 for earlier layer2 on 38k train,"val_still_improving; plateau(range=0.0034); hit_time_budget; train_acc=0.9102,val_acc=0.9734,best_at_epoch_12/12"
+20260319_012848_0468fb,2026-03-19T03:29:42,0.96741,0.969822,566.6,13,7200.4,7200,discard,bs=64 on stage3 cap=6 baseline,"val_still_improving; hit_time_budget; flat(delta=-0.0034); train_acc=0.9115,val_acc=0.9683,best_at_epoch_10/13"
+20260319_033356_02fe7d,2026-03-19T05:34:49,0.971698,0.974966,589.1,13,7200.2,7200,discard,stage3 cap=7 before layer2 on 38k train,"val_still_improving; plateau(range=0.0043); hit_time_budget; flat(delta=-0.0026); train_acc=0.9165,val_acc=0.9717,best_at_epoch_13/13"
+20260319_054139_4edf0b,2026-03-19T07:42:33,0.972556,0.971879,589.1,13,7200.4,7200,discard,stage3 cap=5 before layer2 on 38k train,"hit_time_budget; flat(delta=-0.0043); train_acc=0.9098,val_acc=0.9674,best_at_epoch_12/13"
+20260319_074647_c9dbe6,2026-03-19T09:47:43,0.975986,0.97428,589.1,12,7200.5,7200,keep,stage3 cap=6 + layer2 lr=1.5e-5,"val_still_improving; plateau(range=0.0043); hit_time_budget; flat(delta=+0.0000); train_acc=0.9082,val_acc=0.9743,best_at_epoch_12/12"

@@ -1,3 +1,0 @@
-I tested one experiment in [`train.py`](/Users/rkutyna/Documents/GitHub/capstone/train.py): reduce stage 2 from 4 epochs to 3 (`NOTES: cap stage2 at 3 to extend stage3`). The hypothesis was that the current best run was still improving at timeout, so shifting more of the fixed hour into stage 3 might lift `top1_val_acc`.
-
-The run finished at `top1_val_acc=0.826725` and `top1_test_acc=0.827537`, versus the current best `0.831102`. The logged analysis was `val_still_improving; hit_time_budget; REGRESSED(delta=-0.0103)`. Decision: revert. [`train.py`](/Users/rkutyna/Documents/GitHub/capstone/train.py) has been restored to its pre-cycle contents (`cap stage2 at 4 to extend stage3`).

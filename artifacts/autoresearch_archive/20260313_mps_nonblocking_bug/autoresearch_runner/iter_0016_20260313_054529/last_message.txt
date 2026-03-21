@@ -1,3 +1,0 @@
-Experiment: froze BatchNorm running stats for frozen layers while keeping the `batch size 96, label smoothing 0.0` baseline, then ran `python train.py` once on MPS. The new log row (`20260313_054755_6f02dd`) recorded `top1_val_acc=0.977702` and `top1_test_acc=0.973937`, which did not beat the pre-cycle best `0.979417`.
-
-Decision: reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents. The file checksum matches the backup after restore.

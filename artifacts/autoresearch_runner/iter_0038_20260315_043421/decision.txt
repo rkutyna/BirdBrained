@@ -1,3 +1,0 @@
-keep
-last_metric=0.900618
-best_before=0.894439

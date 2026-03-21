@@ -1,3 +1,0 @@
-Tried one stage-allocation experiment: shortened the `layer4+head` stage from 3 to 2 epochs and raised its LR from `3e-4` to `4e-4` (`NOTES: 2-epoch layer4 stage + lr=4e-4`). Hypothesis was that getting into `layer3` fine-tuning earlier would improve `top1_val_acc`.
-
-Result from the run summary / last log row: `top1_val_acc=0.892379`, `top1_test_acc=0.893085`, `status=discard`, with analysis `val_still_improving; hit_time_budget; REGRESSED(delta=-0.0232)`. Since this did not beat `0.894439`, I reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents and verified it matches exactly.

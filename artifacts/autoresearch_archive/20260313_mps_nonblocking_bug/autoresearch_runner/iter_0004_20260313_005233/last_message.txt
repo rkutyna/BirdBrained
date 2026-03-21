@@ -1,3 +1,0 @@
-Single experiment: raised the stage-1 head LR from `1e-3` to `2e-3` in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to try to improve head-only convergence within the 20-minute budget. `python train.py` ran on MPS, completed 10 epochs, timed out during epoch 11, and appended run `20260313_005720_6bc6d7` with `top1_val_acc=0.96741` and `top1_test_acc=0.96845`.
-
-That did not improve on the pre-cycle best `0.967410`, so I restored [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents.

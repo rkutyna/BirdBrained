@@ -1,3 +1,0 @@
-Enabled EMA in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) with `NOTES = "enable EMA"` as a single-variable test on top of the current best schedule. The run finished training and logged `top1_val_acc=0.873069`, `top1_test_acc=0.877238`, which beats `0.867662`, so I kept the change.
-
-The log confirms a new best in `artifacts/autoresearch_log_full555.csv`. The shell was interrupted afterward during dataloader worker cleanup, but only after the summary, checkpoint save, and log write had already completed.

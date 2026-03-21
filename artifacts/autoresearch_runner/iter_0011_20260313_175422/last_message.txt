@@ -1,3 +1,0 @@
-Tried one change in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): `USE_EMA = True` with `NOTES = "enable EMA"`, based on the hypothesis that EMA would smooth evaluation on this small fine-grained dataset.
-
-Result: the run finished with `top1_val_acc = 0.929674`, `top1_test_acc = 0.906379`, `training_seconds = 1800.2`, and the last row in `artifacts/autoresearch_log.csv` was logged as `discard`. That is below the pre-cycle best `0.951973`, so I reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its exact pre-cycle contents.

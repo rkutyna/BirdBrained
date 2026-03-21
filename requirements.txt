@@ -1,0 +1,8 @@
+numpy
+pandas
+Pillow
+streamlit
+torch
+torchvision
+ultralytics
+huggingface_hub

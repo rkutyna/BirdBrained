@@ -1,2 +1,0 @@
-restore
-reason=no_new_log_row

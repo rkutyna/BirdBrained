@@ -1,5 +1,0 @@
-Tried one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): kept the current best full555 setup and only extended the long `layer3+layer4+head` stage cap from `8` to `15` epochs to use the new `7200s` budget.
-
-Result: the run finished at `top1_val_acc=0.898301` and `top1_test_acc=0.908212` after `16` epochs in `7200.3s`. The logged analysis was `mild_overfit(gap=0.072); hit_time_budget; REGRESSED(delta=-0.0203); train_acc=0.9495,val_acc=0.8777,best_at_epoch_12/16`.
-
-Decision: revert. [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) has been restored to its pre-cycle contents because `0.898301` did not beat `0.900618`.

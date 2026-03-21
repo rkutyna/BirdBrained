@@ -1,3 +1,0 @@
-Experiment this cycle: changed [`train.py`](/Users/rkutyna/Documents/GitHub/capstone/train.py) to test `NUM_WORKERS = 4` with the current batch-96, label-smoothing-0.0 baseline, then ran `python train.py` on Apple MPS.
-
-Run `20260313_052319_5c037d` logged `top1_val_acc=0.718696` and `top1_test_acc=0.731139` in [`artifacts/autoresearch_log.csv`](/Users/rkutyna/Documents/GitHub/capstone/artifacts/autoresearch_log.csv). That did not beat the pre-cycle best `0.979417`, so I reverted [`train.py`](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its exact pre-cycle contents and verified it matches the saved backup.

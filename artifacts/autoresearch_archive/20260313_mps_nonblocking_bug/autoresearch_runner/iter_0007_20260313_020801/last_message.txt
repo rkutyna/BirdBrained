@@ -1,3 +1,0 @@
-- Experiment: added per-stage cosine LR decay on top of the current `batch_size=96` baseline and ran `python train.py` on MPS.
-- Result: run `20260313_021123_ad498a` logged `top1_val_acc=0.977702` and `top1_test_acc=0.978738` in `artifacts/autoresearch_log.csv`. That equals, but does not exceed, the pre-cycle best `0.977702`.
-- Decision: reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents.

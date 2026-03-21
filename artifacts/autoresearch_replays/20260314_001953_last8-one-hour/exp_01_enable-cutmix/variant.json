@@ -1,8 +1,0 @@
-{
-  "name": "enable CutMix",
-  "set": {
-    "CUTMIX_ALPHA": 1.0,
-    "NOTES": "enable CutMix"
-  },
-  "source": "artifacts/autoresearch_runner/iter_0013_20260313_190934/train_before.py"
-}

@@ -1,3 +1,0 @@
-Tried one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): capped the `layer3+layer4+head` stage at `6` epochs and set `NOTES` to `stage3 cap=6 for earlier layer2 on 38k train`, with the hypothesis that the 38,678-image train split needed to reach `layer2` much earlier under the 7200s budget.
-
-`python train.py` finished cleanly on MPS with `top1_val_acc=0.974271`, `top1_test_acc=0.973594`, `training_seconds=7200.2`, `total_epochs=12`. Since `0.974271 > 0.963122`, I kept the change.

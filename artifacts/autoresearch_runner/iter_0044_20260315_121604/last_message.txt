@@ -1,3 +1,0 @@
-Tried one hypothesis in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py#L44) and [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py#L67): extend stage3 for the 7200s budget while lowering stage3 LR to `7.5e-5` (`max_epochs=15`, note `stage3 lr=7.5e-5 + cap=15 for 7200s`).
-
-Result: `top1_val_acc=0.906025`, `top1_test_acc=0.908109`, `training_seconds=7200.1`, `total_epochs=16`. This beat the previous best `0.900618`, so I kept the change.

@@ -1,3 +1,0 @@
-Read `artifacts/autoresearch_log_full555.csv` first, saw the best full555 score was `0.831102`, and used `artifacts/logs/run_summary.csv` only as extra background because the full555 log had just two runs. I tested exactly one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): reduced per-stage warmup from 2 epochs to 1, with `NOTES = "warmup 1 epoch per stage"`.
-
-`python train.py` finished with `top1_val_acc=0.828527`, `top1_test_acc=0.834431`, `status=discard`, and `analysis="val_still_improving; hit_time_budget; flat(delta=-0.0085); train_acc=0.7849,val_acc=0.8226,best_at_epoch_9/9"`. Because `0.828527 < 0.831102`, I reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents.

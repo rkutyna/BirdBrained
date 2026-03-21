@@ -1,3 +1,0 @@
-Tested one experiment: switched the current best configuration to a per-stage cosine LR schedule (`NOTES: "per-stage cosine schedule on best stage caps"`) with the hypothesis that stage 3 would converge better within the same 1800-second budget.
-
-Result: `top1_val_acc=0.950257`, `top1_test_acc=0.942730`, analysis `val_still_improving; hit_time_budget; REGRESSED(delta=-0.0120)`. That did not beat `0.956261`, so the change was reverted. [`train.py`](/Users/rkutyna/Documents/GitHub/capstone/train.py) has been restored to its exact pre-cycle contents.

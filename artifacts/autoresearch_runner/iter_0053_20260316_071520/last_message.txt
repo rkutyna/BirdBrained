@@ -1,3 +1,0 @@
-Tested one experiment in [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py): kept the best 7200s single-stage `layer3+layer4+head` setup and raised its LR from `1e-4` to `1.1e-4` (`NOTES = "skip layer4 stage + stage3 lr=1.1e-4"`). The hypothesis was that the single-stage run was still improving at the budget limit and could use a slightly faster LR.
-
-Result: `top1_val_acc = 0.902163`, `top1_test_acc = 0.911299`, `total_epochs = 16`, with analysis `mild_overfit(gap=0.072); hit_time_budget; REGRESSED(delta=-0.0294); ... best_at_epoch_15/16`. That did not beat `0.911689`, so I reverted [train.py](/Users/rkutyna/Documents/GitHub/capstone/train.py) to its pre-cycle contents. Verified the restore against the saved pre-cycle copy.

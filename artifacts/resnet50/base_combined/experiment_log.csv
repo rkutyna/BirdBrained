@@ -1,0 +1,4 @@
+run_id,timestamp,top1_val_acc,top1_test_acc,peak_memory_mb,total_epochs,training_seconds,time_budget_sec,status,notes,analysis
+20260319_145609_6998cd,2026-03-19T18:58:46,0.925077,0.927969,756.0,7,14400.2,14400,keep,bs=64 + stage lrs 1.5e-4/3e-5 for 166k set,"hit_time_budget; train_acc=0.7455,val_acc=0.9027,best_at_epoch_6/7"
+20260319_190144_fdd51b,2026-03-19T23:04:27,0.919413,0.919325,757.3,4,14400.7,14400,discard,stage3 cap=6 + layer2 lr=1.5e-5 for 166k set,"val_still_improving; hit_time_budget; REGRESSED(delta=-0.0283); train_acc=0.7054,val_acc=0.8968,best_at_epoch_4/4"
+20260319_234135_b8fe6e,2026-03-20T09:22:22,0.935633,0.936098,898.3,20,34675.8,36000,keep,bs=128 + stage lrs 3e-4/6e-5 for 166k throughput,"val_still_improving; improved(delta=+0.0070); train_acc=0.8594,val_acc=0.9307,best_at_epoch_13/20"

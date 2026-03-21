@@ -1,3 +1,0 @@
-I tried one experiment: disable warmup so `stage3` gets useful LR sooner, reflected in [train.py#L44](/Users/rkutyna/Documents/GitHub/capstone/train.py#L44) and [train.py#L131](/Users/rkutyna/Documents/GitHub/capstone/train.py#L131).
-
-Result from the completed run: `top1_val_acc=0.855819`, `top1_test_acc=0.857481`, `training_seconds=3600.2`, `total_epochs=9`. That beats `0.839598`, so I kept the change.
