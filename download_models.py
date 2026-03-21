@@ -12,13 +12,7 @@ from pathlib import Path
 
 from huggingface_hub import hf_hub_download
 
-# TODO: Replace with your HuggingFace repo ID after uploading checkpoints.
-# Upload checkpoints with:
-#   huggingface-cli upload YOUR_USERNAME/bird-classifier \
-#       artifacts/resnet50/subset98_combined/best.pt subset98_combined/best.pt
-#   huggingface-cli upload YOUR_USERNAME/bird-classifier \
-#       artifacts/resnet50/base_combined/best.pt base_combined/best.pt
-HF_REPO_ID = "YOUR_USERNAME/bird-classifier"
+HF_REPO_ID = "rkutyna/bird-classifier"
 
 MODELS = {
     "98": {
