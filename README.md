@@ -6,8 +6,8 @@ An end-to-end system for detecting, classifying, and cataloging bird species in 
 
 ```bash
 # 1. Clone and install
-git clone <repo-url>
-cd capstone
+git clone --branch MVP https://github.com/rkutyna/BirdBrained
+cd BirdBrained
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
