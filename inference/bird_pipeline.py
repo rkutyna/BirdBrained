@@ -39,6 +39,7 @@ class PipelineConfig:
     device: str = "auto"
     output_root: str = "artifacts/pipeline_runs"
     write_metadata_to_originals: bool = True
+    clear_existing_tags: bool = True
     yolo_batch_size: int = 2
     classifier_batch_size: int = 16
     image_load_workers: int = 1
@@ -715,8 +716,15 @@ def _build_exiftool_args_for_row(
     row: ResultRow,
     checkpoint_path: str,
     run_id: str,
+    clear_existing_tags: bool = True,
 ) -> list[str]:
-    """Return the exiftool arg lines for one image (clear + write via -execute)."""
+    """Return the exiftool arg lines for one image.
+
+    When *clear_existing_tags* is True (default), a clear pass removes all
+    existing keyword tags before writing, so re-runs never accumulate
+    duplicates.  When False, prediction tags are appended to any tags
+    already present on the file.
+    """
     species = row.pred_species
     confidence = row.pred_confidence
     conf_level = confidence_level(confidence) or "unknown"
@@ -740,20 +748,24 @@ def _build_exiftool_args_for_row(
 
     target = str(row.source_path)
 
-    # Clear pass
-    args = [
-        "-overwrite_original",
-        "-m",
-        "-XMP-lr:HierarchicalSubject=",
-        "-XMP-dc:Subject=",
-        "-IPTC:Keywords=",
-        target,
-        "-execute",
-        # Write pass
+    args: list[str] = []
+    if clear_existing_tags:
+        # Clear pass: remove existing keyword tags so re-runs never accumulate duplicates.
+        args.extend([
+            "-overwrite_original",
+            "-m",
+            "-XMP-lr:HierarchicalSubject=",
+            "-XMP-dc:Subject=",
+            "-IPTC:Keywords=",
+            target,
+            "-execute",
+        ])
+    # Write pass
+    args.extend([
         "-overwrite_original",
         "-m",
         f"-EXIF:UserComment={comment}",
-    ]
+    ])
     for kw in hierarchical_keywords:
         args.append(f"-XMP-lr:HierarchicalSubject+={kw}")
     for kw in flat_keywords:
@@ -771,12 +783,14 @@ def write_metadata_batch(
     logger: logging.Logger,
     progress_callback: Any | None = None,
     progress_total: int = 0,
+    clear_existing_tags: bool = True,
 ) -> None:
     """Write prediction metadata using a single persistent exiftool process.
 
     Uses exiftool's -stay_open mode to avoid per-image subprocess overhead.
-    Each image requires a clear + write pair joined by -execute, so we send
-    two logical commands per image through the same pipe.
+    When *clear_existing_tags* is True, each image requires a clear + write
+    pair joined by -execute (2 sentinels per image).  When False, only the
+    write command is sent (1 sentinel per image).
     """
     exiftool = shutil.which("exiftool")
     if exiftool is None:
@@ -801,8 +815,9 @@ def write_metadata_batch(
         return
 
     # Build all args and a mapping from -execute boundaries to rows.
-    # Each image produces exactly 2 commands (clear + write) joined by -execute,
-    # so there are 2 {ready} sentinel outputs per image.
+    # When clearing, each image produces 2 commands (clear + write) = 2 sentinels.
+    # When not clearing, each image produces 1 command (write) = 1 sentinel.
+    sentinels_per_image = 2 if clear_existing_tags else 1
     proc = subprocess.Popen(
         [exiftool, "-stay_open", "True", "-@", "-"],
         stdin=subprocess.PIPE,
@@ -815,18 +830,17 @@ def write_metadata_batch(
     metadata_total = len(valid_rows)
     try:
         for row in valid_rows:
-            args = _build_exiftool_args_for_row(row, checkpoint_path, run_id)
-            # Send all args for this image (clear -execute write), then a
-            # final -execute to flush the write command.
+            args = _build_exiftool_args_for_row(row, checkpoint_path, run_id, clear_existing_tags)
+            # Send all args for this image, then a final -execute to flush.
             args.append("-execute")
             for arg in args:
                 proc.stdin.write(arg + "\n")
             proc.stdin.flush()
 
-            # Read the two {readyN} sentinels (one per -execute).
+            # Read {readyN} sentinels (one per -execute command).
             output_lines: list[str] = []
             sentinels_seen = 0
-            while sentinels_seen < 2:
+            while sentinels_seen < sentinels_per_image:
                 line = proc.stdout.readline()
                 if not line:
                     break
@@ -1295,6 +1309,7 @@ def run_inference_batch(
                 logger=logger,
                 progress_callback=progress_callback,
                 progress_total=total,
+                clear_existing_tags=config.clear_existing_tags,
             )
 
     results_df = pd.DataFrame([asdict(r) for r in results])

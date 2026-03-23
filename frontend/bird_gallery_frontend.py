@@ -780,6 +780,7 @@ def _render_classify_tab(
     input_mode: str,
     recursive: bool,
     write_metadata_to_originals: bool,
+    clear_existing_tags: bool,
     folder_path: str,
     uploaded_files: list,
     run_clicked: bool,
@@ -890,6 +891,7 @@ def _render_classify_tab(
                 device=device,
                 output_root="artifacts/pipeline_runs",
                 write_metadata_to_originals=bool(write_metadata_to_originals),
+                clear_existing_tags=bool(clear_existing_tags),
                 yolo_batch_size=int(yolo_batch_size),
                 classifier_batch_size=int(classifier_batch_size),
                 image_load_workers=int(image_load_workers),
@@ -1042,6 +1044,10 @@ def main() -> None:
             "Tag original JPEGs with species/confidence (folder mode)",
             value=True,
         )
+        clear_existing_tags = st.toggle(
+            "Clear existing tags before writing (prevents duplicates on re-runs)",
+            value=True,
+        )
 
         folder_path = ""
         uploaded_files = []
@@ -1081,6 +1087,7 @@ def main() -> None:
         input_mode=input_mode,
         recursive=recursive,
         write_metadata_to_originals=write_metadata_to_originals,
+        clear_existing_tags=clear_existing_tags,
         folder_path=folder_path,
         uploaded_files=uploaded_files,
         run_clicked=run_clicked,

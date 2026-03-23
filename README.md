@@ -8,8 +8,16 @@ An end-to-end system for detecting, classifying, and cataloging bird species in 
 # 1. Clone and install
 git clone --branch MVP https://github.com/rkutyna/BirdBrained
 cd BirdBrained
-python3 -m venv .venv
+python -m venv .venv          # Use "python3" if your system requires it (common on macOS/Linux)
+
+# Activate the virtual environment
+# macOS / Linux:
 source .venv/bin/activate
+# Windows (Command Prompt):
+# .venv\Scripts\activate
+# Windows (PowerShell):
+# .venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
 
 # 2. Download model checkpoints from HuggingFace Hub
@@ -18,8 +26,11 @@ python download_models.py
 # 3. (Optional) Install exiftool for Lightroom metadata tagging
 # macOS:
 brew install exiftool
-# Ubuntu:
+# Ubuntu / Debian:
 sudo apt install libimage-exiftool-perl
+# Windows (Chocolatey):
+# choco install exiftool
+# Windows (manual): download from https://exiftool.org and add to PATH
 
 # 4. Launch the app
 streamlit run frontend/bird_gallery_frontend.py
@@ -198,7 +209,8 @@ capstone/
 - Python 3.10+
 - `exiftool` — required only for metadata tagging to original JPEGs
   - macOS: `brew install exiftool`
-  - Ubuntu: `sudo apt install libimage-exiftool-perl`
+  - Ubuntu / Debian: `sudo apt install libimage-exiftool-perl`
+  - Windows: `choco install exiftool` or download from [exiftool.org](https://exiftool.org)
 
 ### Python Packages
 
