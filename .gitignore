@@ -18,6 +18,8 @@
 # Photos
 *.jpg
 *.jpeg
+!birdbrained/personal_library_test/*.jpg
+!birdbrained/personal_library_test/*.jpeg
 
 # Python
 __pycache__/
