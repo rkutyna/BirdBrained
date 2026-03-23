@@ -6,8 +6,10 @@ from pathlib import Path
 import gc
 import json
 import logging
+import os
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import numpy as np
@@ -39,6 +41,7 @@ class PipelineConfig:
     write_metadata_to_originals: bool = True
     yolo_batch_size: int = 2
     classifier_batch_size: int = 16
+    image_load_workers: int = 1
 
 
 @dataclass
@@ -708,6 +711,166 @@ def write_prediction_metadata(
         return False, "exiftool", str(e)
 
 
+def _build_exiftool_args_for_row(
+    row: ResultRow,
+    checkpoint_path: str,
+    run_id: str,
+) -> list[str]:
+    """Return the exiftool arg lines for one image (clear + write via -execute)."""
+    species = row.pred_species
+    confidence = row.pred_confidence
+    conf_level = confidence_level(confidence) or "unknown"
+    comment = _prediction_comment(species, confidence, checkpoint_path, run_id)
+    if row.sharpness_score_100 is not None:
+        comment = f"{comment}; sharpness_score={row.sharpness_score_100:.1f}/100"
+        if row.sharpness_level:
+            comment = f"{comment}; sharpness_level={row.sharpness_level}"
+
+    hierarchical_keywords = [
+        _hierarchical_keyword(["Species", species]),
+        _hierarchical_keyword(["Confidence", conf_level]),
+    ]
+    if row.sharpness_level:
+        hierarchical_keywords.append(_hierarchical_keyword(["Sharpness", row.sharpness_level]))
+
+    flat_keywords = [_keyword_component(species)]
+    flat_keywords.append(f"Confidence: {_keyword_component(conf_level)}")
+    if row.sharpness_level:
+        flat_keywords.append(f"Sharpness: {_keyword_component(row.sharpness_level)}")
+
+    target = str(row.source_path)
+
+    # Clear pass
+    args = [
+        "-overwrite_original",
+        "-m",
+        "-XMP-lr:HierarchicalSubject=",
+        "-XMP-dc:Subject=",
+        "-IPTC:Keywords=",
+        target,
+        "-execute",
+        # Write pass
+        "-overwrite_original",
+        "-m",
+        f"-EXIF:UserComment={comment}",
+    ]
+    for kw in hierarchical_keywords:
+        args.append(f"-XMP-lr:HierarchicalSubject+={kw}")
+    for kw in flat_keywords:
+        args.append(f"-XMP-dc:Subject+={kw}")
+        args.append(f"-IPTC:Keywords+={kw}")
+    args.append("-IPTCDigest=new")
+    args.append(target)
+    return args
+
+
+def write_metadata_batch(
+    rows: list[ResultRow],
+    checkpoint_path: str,
+    run_id: str,
+    logger: logging.Logger,
+    progress_callback: Any | None = None,
+    progress_total: int = 0,
+) -> None:
+    """Write prediction metadata using a single persistent exiftool process.
+
+    Uses exiftool's -stay_open mode to avoid per-image subprocess overhead.
+    Each image requires a clear + write pair joined by -execute, so we send
+    two logical commands per image through the same pipe.
+    """
+    exiftool = shutil.which("exiftool")
+    if exiftool is None:
+        logger.warning("exiftool not found — skipping metadata writing")
+        for row in rows:
+            row.metadata_written = False
+            row.metadata_method = None
+            row.metadata_error = "exiftool_not_found"
+        return
+
+    # Pre-validate: skip rows whose source file is missing.
+    valid_rows: list[ResultRow] = []
+    for row in rows:
+        if not Path(row.source_path).exists():
+            row.metadata_written = False
+            row.metadata_method = None
+            row.metadata_error = f"missing_file:{row.source_path}"
+        else:
+            valid_rows.append(row)
+
+    if not valid_rows:
+        return
+
+    # Build all args and a mapping from -execute boundaries to rows.
+    # Each image produces exactly 2 commands (clear + write) joined by -execute,
+    # so there are 2 {ready} sentinel outputs per image.
+    proc = subprocess.Popen(
+        [exiftool, "-stay_open", "True", "-@", "-"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    metadata_done = 0
+    metadata_total = len(valid_rows)
+    try:
+        for row in valid_rows:
+            args = _build_exiftool_args_for_row(row, checkpoint_path, run_id)
+            # Send all args for this image (clear -execute write), then a
+            # final -execute to flush the write command.
+            args.append("-execute")
+            for arg in args:
+                proc.stdin.write(arg + "\n")
+            proc.stdin.flush()
+
+            # Read the two {readyN} sentinels (one per -execute).
+            output_lines: list[str] = []
+            sentinels_seen = 0
+            while sentinels_seen < 2:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                stripped = line.strip()
+                if stripped.startswith("{ready"):
+                    sentinels_seen += 1
+                else:
+                    output_lines.append(stripped)
+
+            # Check for errors in the output.
+            error_lines = [l for l in output_lines if "error" in l.lower() or "warning" in l.lower()]
+            if error_lines:
+                row.metadata_written = False
+                row.metadata_method = "exiftool"
+                row.metadata_error = "; ".join(error_lines)[:500]
+                logger.warning("Metadata tag failed | image=%s | err=%s", row.image_name, row.metadata_error)
+            else:
+                row.metadata_written = True
+                row.metadata_method = "exiftool"
+                row.metadata_error = None
+                logger.info("Metadata tagged | image=%s | method=exiftool", row.image_name)
+
+            metadata_done += 1
+            if progress_callback is not None:
+                progress_callback(
+                    progress_total, progress_total,
+                    f"Writing metadata {metadata_done}/{metadata_total}: {row.image_name}",
+                )
+    except Exception as e:
+        logger.exception("Batch metadata writing failed")
+        for row in valid_rows:
+            if row.metadata_written is None:
+                row.metadata_written = False
+                row.metadata_method = "exiftool"
+                row.metadata_error = str(e)
+    finally:
+        try:
+            proc.stdin.write("-stay_open\nFalse\n")
+            proc.stdin.flush()
+            proc.wait(timeout=30)
+        except Exception:
+            proc.kill()
+
+
 def run_inference_batch(
     inputs: list[InputItem],
     config: PipelineConfig,
@@ -737,54 +900,88 @@ def run_inference_batch(
     total = len(inputs)
     yolo_batch_size = max(1, int(config.yolo_batch_size))
     classifier_batch_size = max(1, int(config.classifier_batch_size))
+    image_load_workers = max(1, int(config.image_load_workers))
     logger.info(
-        "Batching config | yolo_batch_size=%d | classifier_batch_size=%d",
+        "Batching config | yolo_batch_size=%d | classifier_batch_size=%d | image_load_workers=%d",
         yolo_batch_size,
         classifier_batch_size,
+        image_load_workers,
     )
+
+    def _load_single_image(
+        item: InputItem, item_index: int, originals_dir: Path,
+    ) -> dict[str, Any]:
+        """Load, convert, and save one image. Designed to run in a thread pool."""
+        ts = datetime.now().isoformat(timespec="seconds")
+        image = None
+        try:
+            if item.pil_image is not None:
+                image = item.pil_image.convert("RGB")
+            elif item.uploaded_file is not None:
+                item.uploaded_file.seek(0)
+                with Image.open(item.uploaded_file) as im:
+                    image = im.convert("RGB")
+            else:
+                with Image.open(item.source_path) as im:
+                    image = im.convert("RGB")
+
+            original_name = f"{item_index:05d}_{_safe_stem(Path(item.image_name).name)}"
+            original_path = originals_dir / original_name
+            image.save(original_path, "JPEG", quality=95, optimize=True)
+            return {
+                "item": item,
+                "idx": item_index,
+                "ts": ts,
+                "image": image,
+                "crop": None,
+                "detection": None,
+                "original_path": str(original_path),
+                "error": None,
+            }
+        except Exception as e:
+            if image is not None:
+                try:
+                    image.close()
+                except Exception:
+                    pass
+            return {"item": item, "idx": item_index, "ts": ts, "error": e}
 
     processed_count = 0
     for batch_items in _iter_chunks(inputs, yolo_batch_size):
         loaded: list[dict[str, Any]] = []
 
-        for item in batch_items:
-            item_index = processed_count + len(loaded) + 1
-            ts = datetime.now().isoformat(timespec="seconds")
-            image = None
-            try:
-                if progress_callback is not None:
-                    progress_callback(processed_count, total, f"Loading {item.image_name}")
+        if progress_callback is not None:
+            progress_callback(processed_count, total, f"Loading batch ({len(batch_items)} images)")
 
-                if item.pil_image is not None:
-                    image = item.pil_image.convert("RGB")
-                elif item.uploaded_file is not None:
-                    item.uploaded_file.seek(0)
-                    with Image.open(item.uploaded_file) as im:
-                        image = im.convert("RGB")
-                else:
-                    with Image.open(item.source_path) as im:
-                        image = im.convert("RGB")
+        batch_with_indices = [
+            (item, processed_count + i + 1) for i, item in enumerate(batch_items)
+        ]
 
-                original_name = f"{item_index:05d}_{_safe_stem(Path(item.image_name).name)}"
-                original_path = originals_dir / original_name
-                image.save(original_path, "JPEG", quality=95, optimize=True)
-                loaded.append(
-                    {
-                        "item": item,
-                        "idx": item_index,
-                        "ts": ts,
-                        "image": image,
-                        "crop": None,
-                        "detection": None,
-                        "original_path": str(original_path),
-                    }
-                )
-            except Exception as e:
-                if image is not None:
-                    try:
-                        image.close()
-                    except Exception:
-                        pass
+        if image_load_workers <= 1:
+            load_results = [
+                _load_single_image(item, idx, originals_dir)
+                for item, idx in batch_with_indices
+            ]
+        else:
+            workers = min(image_load_workers, len(batch_with_indices))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(_load_single_image, item, idx, originals_dir): idx
+                    for item, idx in batch_with_indices
+                }
+                load_results_by_idx: dict[int, dict] = {}
+                for future in as_completed(futures):
+                    result = future.result()
+                    load_results_by_idx[result["idx"]] = result
+                load_results = [
+                    load_results_by_idx[idx] for _, idx in batch_with_indices
+                ]
+
+        for result in load_results:
+            item = result["item"]
+            ts = result["ts"]
+            err = result.get("error")
+            if err is not None:
                 logger.exception("Error loading image=%s", item.image_name)
                 errors.append(
                     ErrorRow(
@@ -792,14 +989,16 @@ def run_inference_batch(
                         source_type=item.source_type,
                         source_path=item.source_path,
                         image_name=item.image_name,
-                        error_type=type(e).__name__,
-                        error_message=str(e),
+                        error_type=type(err).__name__,
+                        error_message=str(err),
                         timestamp=ts,
                     )
                 )
                 processed_count += 1
                 if progress_callback is not None:
-                    progress_callback(processed_count, total, f"Error on {item.image_name}: {type(e).__name__}")
+                    progress_callback(processed_count, total, f"Error on {item.image_name}: {type(err).__name__}")
+            else:
+                loaded.append(result)
 
         if not loaded:
             continue
@@ -1080,32 +1279,23 @@ def run_inference_batch(
             results[idx].sharpness_level = confidence_level(score_01)
 
     if config.write_metadata_to_originals:
-        for row in results:
-            if not row.yolo_detected or row.source_type != "folder":
-                continue
-            if row.pred_species is None or row.pred_confidence is None:
-                continue
-            metadata_written, metadata_method, metadata_error = write_prediction_metadata(
-                image_path=row.source_path,
-                species=row.pred_species,
-                confidence=row.pred_confidence,
+        metadata_rows = [
+            row for row in results
+            if row.yolo_detected
+            and row.source_type == "folder"
+            and row.pred_species is not None
+            and row.pred_confidence is not None
+        ]
+        if metadata_rows:
+            logger.info("Writing metadata to %d originals (stay_open batch)", len(metadata_rows))
+            write_metadata_batch(
+                rows=metadata_rows,
                 checkpoint_path=config.classifier_checkpoint,
                 run_id=run_id,
-                sharpness_score_100=row.sharpness_score_100,
-                sharpness_level_name=row.sharpness_level,
+                logger=logger,
+                progress_callback=progress_callback,
+                progress_total=total,
             )
-            row.metadata_written = metadata_written
-            row.metadata_method = metadata_method
-            row.metadata_error = metadata_error
-            if metadata_written:
-                logger.info("Metadata tagged | image=%s | method=%s", row.image_name, metadata_method)
-            else:
-                logger.warning(
-                    "Metadata tag failed | image=%s | method=%s | err=%s",
-                    row.image_name,
-                    metadata_method,
-                    metadata_error,
-                )
 
     results_df = pd.DataFrame([asdict(r) for r in results])
     errors_df = pd.DataFrame([asdict(e) for e in errors])
