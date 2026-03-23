@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -775,6 +776,7 @@ def _render_classify_tab(
     device: str,
     yolo_batch_size: int,
     classifier_batch_size: int,
+    image_load_workers: int,
     input_mode: str,
     recursive: bool,
     write_metadata_to_originals: bool,
@@ -869,7 +871,7 @@ def _render_classify_tab(
                 return
 
             logger.info(
-                "Input resolved | count=%d | checkpoint=%s | yolo_weights=%s | yolo_conf=%.3f | device=%s | yolo_bs=%d | cls_bs=%d",
+                "Input resolved | count=%d | checkpoint=%s | yolo_weights=%s | yolo_conf=%.3f | device=%s | yolo_bs=%d | cls_bs=%d | load_workers=%d",
                 len(inputs),
                 classifier_checkpoint,
                 yolo_weights,
@@ -877,6 +879,7 @@ def _render_classify_tab(
                 device,
                 int(yolo_batch_size),
                 int(classifier_batch_size),
+                int(image_load_workers),
             )
 
             cfg = PipelineConfig(
@@ -889,6 +892,7 @@ def _render_classify_tab(
                 write_metadata_to_originals=bool(write_metadata_to_originals),
                 yolo_batch_size=int(yolo_batch_size),
                 classifier_batch_size=int(classifier_batch_size),
+                image_load_workers=int(image_load_workers),
             )
 
             progress = st.progress(0.0, text="Initializing...")
@@ -1028,6 +1032,8 @@ def main() -> None:
         device = st.selectbox("Device", options=["auto", get_default_device(), "cpu", "cuda", "mps"], index=0)
         yolo_batch_size = st.slider("YOLO batch size", min_value=1, max_value=16, value=2, step=1)
         classifier_batch_size = st.slider("Classifier batch size", min_value=1, max_value=128, value=16, step=1)
+        _max_workers = os.cpu_count() or 4
+        image_load_workers = st.slider("Image load workers (threads)", min_value=1, max_value=_max_workers, value=min(4, _max_workers), step=1)
 
         st.header("Input")
         input_mode = st.radio("Input mode", options=["Upload files", "Folder path"], index=0)
@@ -1071,6 +1077,7 @@ def main() -> None:
         device=device,
         yolo_batch_size=yolo_batch_size,
         classifier_batch_size=classifier_batch_size,
+        image_load_workers=image_load_workers,
         input_mode=input_mode,
         recursive=recursive,
         write_metadata_to_originals=write_metadata_to_originals,
