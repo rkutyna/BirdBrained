@@ -37,7 +37,7 @@ from PIL import Image
 # Paths
 # ---------------------------------------------------------------------------
 ARTIFACTS_DIR = Path("artifacts")
-INAT_DIR = Path("iNaturalist Dataset")
+INAT_DIR = Path("iNaturalist_Dataset")
 INAT_IMAGES_DIR = INAT_DIR / "images"
 EXTERNAL_DIR = ARTIFACTS_DIR / "external"
 LABELS_DIR = ARTIFACTS_DIR / "labels"

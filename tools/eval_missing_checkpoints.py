@@ -27,7 +27,7 @@ from torchvision import models, transforms
 # ---------------------------------------------------------------------------
 ARTIFACTS_DIR = Path("artifacts")
 SUMMARY_CSV = Path("artifacts/logs/run_summary.csv")
-DATA_ROOT = Path("NABirds Dataset/nabirds")
+DATA_ROOT = Path("NABirds_Dataset/nabirds")
 IMAGES_DIR = DATA_ROOT / "images"
 
 LABELS_DIR = ARTIFACTS_DIR / "labels"

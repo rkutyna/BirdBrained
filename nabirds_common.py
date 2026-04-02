@@ -27,7 +27,7 @@ SEED = 42
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-DATA_ROOT = Path("NABirds Dataset/nabirds")
+DATA_ROOT = Path("NABirds_Dataset/nabirds")
 IMAGES_DIR = DATA_ROOT / "images"
 ARTIFACTS_DIR = Path("artifacts")
 LABELS_DIR = ARTIFACTS_DIR / "labels"

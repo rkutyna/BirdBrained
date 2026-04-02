@@ -37,7 +37,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 # Paths
 # ---------------------------------------------------------------------------
 ARTIFACTS_DIR = Path("artifacts")
-BIRDSNAP_DIR = Path("Birdsnap Dataset")
+BIRDSNAP_DIR = Path("Birdsnap_Dataset")
 BIRDSNAP_IMAGES_DIR = BIRDSNAP_DIR / "images"
 EXTERNAL_DIR = ARTIFACTS_DIR / "external"
 LABELS_DIR = ARTIFACTS_DIR / "labels"

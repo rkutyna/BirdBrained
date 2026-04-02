@@ -561,7 +561,7 @@ li[role="option"][aria-selected="true"] {
 
     with st.sidebar:
         st.header("Paths")
-        dataset_root = st.text_input("NABirds root", value="NABirds Dataset/nabirds")
+        dataset_root = st.text_input("NABirds root", value="NABirds_Dataset/nabirds")
         artifacts_dir = st.text_input("Artifacts dir", value="artifacts")
         artifacts_path = Path(artifacts_dir)
         ckpt_files = sorted(artifacts_path.rglob("*.pt"))

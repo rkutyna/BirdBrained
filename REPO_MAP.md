@@ -257,6 +257,6 @@ All commands should be run from the project root directory.
 
 2. **`nabirds_common.py` centralises shared values** for the human-maintained code (`training_engine.py`, `prepare.py`, `bird_pipeline.py`), keeping them in sync.
 
-3. **All scripts use CWD-relative paths** (`Path("artifacts")`, `Path("NABirds Dataset/nabirds")`) — always run from the project root.
+3. **All scripts use CWD-relative paths** (`Path("artifacts")`, `Path("NABirds_Dataset/nabirds")`) — always run from the project root.
 
 4. **Entry points in subdirectories include a `sys.path` fix** to ensure the project root is importable regardless of how the script is launched.

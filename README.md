@@ -131,7 +131,7 @@ capstone/
 │       └── pipeline.log
 │
 ├── .streamlit/config.toml                     Streamlit theme configuration
-├── NABirds Dataset/nabirds/                   NABirds metadata and images (not in git)
+├── NABirds_Dataset/nabirds/                   NABirds metadata and images (not in git)
 │
 ├── train.py                                   Self-contained training script (Codex-managed)
 ├── nabirds_common.py                          Shared constants and utilities
@@ -168,7 +168,7 @@ pip install rawpy
 
 ### Data
 
-Training and evaluation require the [NABirds dataset](https://dl.allawnmilner.com/nabirds) extracted to `NABirds Dataset/nabirds/`. Inference on personal photos does not require this dataset — only a trained checkpoint (`.pt` file) in `artifacts/resnet50/`.
+Training and evaluation require the [NABirds dataset](https://dl.allawnmilner.com/nabirds) extracted to `NABirds_Dataset/nabirds/`. Inference on personal photos does not require this dataset — only a trained checkpoint (`.pt` file) in `artifacts/resnet50/`.
 
 ## Running Inference (Primary App)
 

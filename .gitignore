@@ -1,11 +1,11 @@
 # NABirds dataset
-/NABirds Dataset/
+/NABirds_Dataset/
 
 # Birdsnap dataset
-/Birdsnap Dataset/
+/Birdsnap_Dataset/
 
 # iNaturalist dataset
-/iNaturalist Dataset/
+/iNaturalist_Dataset/
 
 # Pipeline/log outputs
 /artifacts/logs/
@@ -44,3 +44,5 @@ __pycache__/
 
 
 .claude/
+
+/kaggle_upload/
