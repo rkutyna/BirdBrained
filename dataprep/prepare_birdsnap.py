@@ -39,6 +39,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 ARTIFACTS_DIR = Path("artifacts")
 BIRDSNAP_DIR = Path("Birdsnap_Dataset")
 BIRDSNAP_IMAGES_DIR = BIRDSNAP_DIR / "images"
+BIRDSNAP_IMAGES_TXT = BIRDSNAP_DIR / "images.txt"
 EXTERNAL_DIR = ARTIFACTS_DIR / "external"
 LABELS_DIR = ARTIFACTS_DIR / "labels"
 
@@ -46,6 +47,7 @@ BIRDSNAP_PKL = EXTERNAL_DIR / "birdsnap_splits.pkl"
 BASE_SPECIES_CSV = LABELS_DIR / "label_names_nabirds_base_species.csv"
 
 HF_DATASET_NAME = "sasha/birdsnap"
+STREAM_INDEX_RE = re.compile(r"train_(\d+)$")
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +108,104 @@ def save_image(img: Image.Image, dest: Path) -> None:
     img.save(dest, "JPEG", quality=95)
 
 
+def load_birdsnap_bbox_metadata() -> tuple[list[dict], dict[str, dict[str, int]]]:
+    """Load Birdsnap bbox metadata from the original images.txt table if present."""
+    if not BIRDSNAP_IMAGES_TXT.exists():
+        print(f"  WARNING: {BIRDSNAP_IMAGES_TXT} not found; falling back to full-image boxes.")
+        return [], {}
+
+    df = pd.read_csv(BIRDSNAP_IMAGES_TXT, sep="\t")
+    required_cols = {"path", "bb_x1", "bb_y1", "bb_x2", "bb_y2"}
+    missing_cols = required_cols - set(df.columns)
+    if missing_cols:
+        print(
+            f"  WARNING: {BIRDSNAP_IMAGES_TXT} is missing columns {sorted(missing_cols)}; "
+            "falling back to full-image boxes."
+        )
+        return [], {}
+
+    bbox_cols = ["bb_x1", "bb_y1", "bb_x2", "bb_y2"]
+    for col in bbox_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.reset_index(drop=True)
+    records = df.to_dict("records")
+
+    lookups: dict[str, dict[str, int]] = {}
+    for key in ["path", "url", "md5"]:
+        if key in df.columns:
+            series = df[key].dropna().astype(str)
+            lookups[key] = {value: int(idx) for idx, value in series.items()}
+
+    valid_bbox_count = 0
+    for record in records:
+        if bbox_from_metadata_record(record) is not None:
+            valid_bbox_count += 1
+
+    print(
+        f"  Loaded Birdsnap metadata: {len(records):,} rows | "
+        f"valid bbox rows: {valid_bbox_count:,}"
+    )
+    return records, lookups
+
+
+def lookup_birdsnap_metadata_record(
+    example: dict, stream_idx: int, metadata_records: list[dict], metadata_lookups: dict[str, dict[str, int]]
+) -> dict | None:
+    """Match a streamed HF example to its Birdsnap metadata row."""
+    candidate_fields = [
+        ("path", "path"),
+        ("image_path", "path"),
+        ("url", "url"),
+        ("image_url", "url"),
+        ("md5", "md5"),
+        ("image_md5", "md5"),
+    ]
+
+    for field_name, lookup_name in candidate_fields:
+        lookup = metadata_lookups.get(lookup_name)
+        if not lookup:
+            continue
+        value = example.get(field_name)
+        if value is None:
+            continue
+        idx = lookup.get(str(value))
+        if idx is not None:
+            return metadata_records[idx]
+
+    if 0 <= stream_idx < len(metadata_records):
+        return metadata_records[stream_idx]
+    return None
+
+
+def bbox_from_metadata_record(record: dict | None) -> tuple[int, int, int, int] | None:
+    """Convert Birdsnap x1/y1/x2/y2 metadata into x/y/w/h."""
+    if not record:
+        return None
+
+    coords = [record.get("bb_x1"), record.get("bb_y1"), record.get("bb_x2"), record.get("bb_y2")]
+    if any(pd.isna(value) for value in coords):
+        return None
+
+    x1, y1, x2, y2 = [int(round(float(value))) for value in coords]
+    w = x2 - x1
+    h = y2 - y1
+    if w <= 0 or h <= 0:
+        return None
+    return x1, y1, w, h
+
+
+def bbox_from_saved_birdsnap_path(img_path: Path, metadata_records: list[dict]) -> tuple[int, int, int, int] | None:
+    """Recover a bbox from a saved Birdsnap filename like train_013705.jpg."""
+    match = STREAM_INDEX_RE.match(img_path.stem)
+    if not match:
+        return None
+    stream_idx = int(match.group(1))
+    if not (0 <= stream_idx < len(metadata_records)):
+        return None
+    return bbox_from_metadata_record(metadata_records[stream_idx])
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -135,6 +235,9 @@ def main():
     base_labels = load_base_species_labels()
     print(f"  {len(base_labels)} base species loaded")
 
+    print("\n[1b] Loading Birdsnap bbox metadata...")
+    birdsnap_metadata_records, birdsnap_metadata_lookups = load_birdsnap_bbox_metadata()
+
     # -----------------------------------------------------------------------
     # --build-from-disk: skip HuggingFace, build pickle from existing images
     # -----------------------------------------------------------------------
@@ -142,6 +245,8 @@ def main():
         print("\n[2] Building pickle from images already on disk...")
         rows = []
         species_with_images: set[int] = set()
+        bbox_hits = 0
+        bbox_fallbacks = 0
 
         for class_dir in sorted(BIRDSNAP_IMAGES_DIR.glob("class_*")):
             target = int(class_dir.name.split("_")[1])
@@ -151,12 +256,18 @@ def main():
                 try:
                     with Image.open(img_path) as img:
                         w, h = img.size
+                    bbox = bbox_from_saved_birdsnap_path(img_path, birdsnap_metadata_records)
+                    if bbox is None:
+                        bbox = (0, 0, w, h)
+                        bbox_fallbacks += 1
+                    else:
+                        bbox_hits += 1
                     rows.append({
                         "image_path": str(img_path),
-                        "x": 0,
-                        "y": 0,
-                        "w": w,
-                        "h": h,
+                        "x": bbox[0],
+                        "y": bbox[1],
+                        "w": bbox[2],
+                        "h": bbox[3],
                         "target": target,
                     })
                     species_with_images.add(target)
@@ -167,6 +278,7 @@ def main():
                 print(f"    Scanned {len(rows):,} images...")
 
         print(f"  Found {len(rows):,} images across {len(species_with_images)} species")
+        print(f"  Bounding boxes recovered: {bbox_hits:,} | Full-image fallbacks: {bbox_fallbacks:,}")
 
         train_df = pd.DataFrame(rows)
         rng = np.random.default_rng(42)
@@ -218,6 +330,8 @@ def main():
     rows = []
     skipped = 0
     saved = 0
+    bbox_hits = 0
+    bbox_fallbacks = 0
     matched_species: set[str] = set()
     unmatched_species: set[str] = set()
 
@@ -249,12 +363,22 @@ def main():
                     save_image(img, img_path)
 
                 w, h = img.size
+                bbox = bbox_from_metadata_record(
+                    lookup_birdsnap_metadata_record(
+                        example, i, birdsnap_metadata_records, birdsnap_metadata_lookups
+                    )
+                )
+                if bbox is None:
+                    bbox = (0, 0, w, h)
+                    bbox_fallbacks += 1
+                else:
+                    bbox_hits += 1
                 rows.append({
                     "image_path": str(img_path),
-                    "x": 0,
-                    "y": 0,
-                    "w": w,
-                    "h": h,
+                    "x": bbox[0],
+                    "y": bbox[1],
+                    "w": bbox[2],
+                    "h": bbox[3],
                     "target": target,
                 })
 
@@ -283,6 +407,7 @@ def main():
     unmatched = sorted(unmatched_species)
     print(f"  Total saved: {saved:,} | Skipped (unmatched species): {skipped:,}")
     print(f"  Matched: {len(matched)} / {len(matched) + len(unmatched)} Birdsnap species")
+    print(f"  Bounding boxes recovered: {bbox_hits:,} | Full-image fallbacks: {bbox_fallbacks:,}")
     if unmatched[:5]:
         print(f"    Unmatched examples: {unmatched[:5]}")
 

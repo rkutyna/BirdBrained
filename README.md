@@ -78,8 +78,8 @@ capstone/
 │
 ├── dataprep/                                  Dataset preparation
 │   ├── prepare.py                             NABirds train/val/test splits
-│   ├── prepare_birdsnap.py                    Birdsnap download from HuggingFace
-│   ├── prepare_inat.py                        iNaturalist API download
+│   ├── prepare_birdsnap.py                    Birdsnap download + bounding-box metadata prep
+│   ├── prepare_inat.py                        iNaturalist download + bounding-box metadata prep
 │   └── prepare_combined.py                    Merge NABirds + external datasets
 │
 ├── inference/                                 Core inference pipeline
@@ -91,7 +91,9 @@ capstone/
 │   ├── monitor.py                             Live terminal monitor for autoresearch
 │   └── replay_train_variants.py               Replay saved train.py variants
 │
-├── notebooks/                                 Jupyter notebooks (historical/exploratory)
+├── notebooks/                                 Kaggle + exploratory notebooks
+│   ├── kaggle_train.ipynb                     Kaggle training notebook with optional session-local cache
+│   ├── kaggle_preprocess_export.ipynb         Build/publish preprocessed Kaggle dataset shards
 │   ├── resnet.ipynb                           ResNet training development
 │   ├── overnight.ipynb                        Extended training experiments
 │   ├── bird_infer_pipeline.ipynb              Inference pipeline development
@@ -115,9 +117,9 @@ capstone/
 │   │   │   └── experiment_log.csv             Experiment history
 │   │   ├── full555/                           555-species outputs
 │   │   └── runs/                              Individual training run checkpoints
-│   ├── external/                              External dataset caches
-│   │   ├── birdsnap_splits.pkl
-│   │   ├── inat_splits.pkl
+│   ├── external/                              External dataset metadata caches
+│   │   ├── birdsnap_splits.pkl                Birdsnap training metadata + bounding boxes
+│   │   ├── inat_splits.pkl                    iNaturalist training metadata + bounding boxes
 │   │   └── inat_manifest.json
 │   ├── autoresearch_runner/                   Per-iteration artifacts
 │   ├── logs/                                  Training logs (gitignored)
@@ -131,6 +133,7 @@ capstone/
 │       └── pipeline.log
 │
 ├── .streamlit/config.toml                     Streamlit theme configuration
+├── Birdsnap_Dataset/images.txt                Birdsnap metadata with per-image bounding boxes
 ├── NABirds_Dataset/nabirds/                   NABirds metadata and images (not in git)
 │
 ├── train.py                                   Self-contained training script (Codex-managed)
@@ -169,6 +172,24 @@ pip install rawpy
 ### Data
 
 Training and evaluation require the [NABirds dataset](https://dl.allawnmilner.com/nabirds) extracted to `NABirds_Dataset/nabirds/`. Inference on personal photos does not require this dataset — only a trained checkpoint (`.pt` file) in `artifacts/resnet50/`.
+
+The Kaggle training workflow can also consume:
+
+- Raw **Birdsnap** images plus `Birdsnap_Dataset/images.txt` for bounding boxes.
+- Raw **iNaturalist** images plus `artifacts/external/inat_splits.pkl` for bounding boxes.
+- Optional preprocessed Kaggle shard datasets for Birdsnap / iNaturalist, which are detected and reused automatically.
+
+## Kaggle Training Workflow
+
+`notebooks/kaggle_train.ipynb` is the current Kaggle training notebook. It resolves attached Kaggle dataset mounts, merges multiple Birdsnap shards, and uses bbox-aware crops for all supported raw datasets:
+
+- **NABirds**: reads native metadata files (`images.txt`, `bounding_boxes.txt`, split files).
+- **Birdsnap**: reads `images.txt` bounding boxes.
+- **iNaturalist**: reads bbox metadata from `inat_splits.pkl`.
+
+By default it also builds a deterministic session-local cache in `/kaggle/working/session_preprocessed_cache` at the start of a run. That cache performs image decode, bbox crop, resize, and pad once per session, then trains from the cached files so the DataLoader does not repeat that work every batch.
+
+`notebooks/kaggle_preprocess_export.ipynb` is optional. It precomputes those same deterministic crops into publishable Kaggle dataset shards and can version them with the Kaggle CLI, so later training runs can skip the cache-build step entirely.
 
 ## Running Inference (Primary App)
 

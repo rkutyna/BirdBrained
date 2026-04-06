@@ -17,8 +17,8 @@ capstone/
 │
 ├── dataprep/                        Dataset preparation
 │   ├── prepare.py                   NABirds train/val/test splits
-│   ├── prepare_birdsnap.py          Birdsnap download from HuggingFace
-│   ├── prepare_inat.py              iNaturalist API download
+│   ├── prepare_birdsnap.py          Birdsnap download + bounding-box metadata prep
+│   ├── prepare_inat.py              iNaturalist download + bounding-box metadata prep
 │   └── prepare_combined.py          Merge NABirds + external datasets
 │
 ├── inference/                       Core inference pipeline
@@ -30,7 +30,9 @@ capstone/
 │   ├── monitor.py                   Live terminal monitor for autoresearch
 │   └── replay_train_variants.py     Replay saved train.py variants
 │
-├── notebooks/                       Jupyter notebooks (historical/exploratory)
+├── notebooks/                       Kaggle + exploratory notebooks
+│   ├── kaggle_train.ipynb           Kaggle training notebook with optional session-local cache
+│   ├── kaggle_preprocess_export.ipynb  Build/publish preprocessed Kaggle dataset shards
 │   ├── resnet.ipynb                 ResNet training development
 │   ├── overnight.ipynb              Extended training experiments
 │   ├── bird_infer_pipeline.ipynb    Inference pipeline development
@@ -56,9 +58,9 @@ capstone/
 │   │   ├── base_combined/          Base combined outputs
 │   │   ├── subset98_combined/      Subset98 combined outputs
 │   │   └── runs/                   Individual training run checkpoints
-│   ├── external/                    External dataset caches
-│   │   ├── birdsnap_splits.pkl     Birdsnap training data
-│   │   ├── inat_splits.pkl         iNaturalist training data
+│   ├── external/                    External dataset metadata caches
+│   │   ├── birdsnap_splits.pkl     Birdsnap training metadata + bounding boxes
+│   │   ├── inat_splits.pkl         iNaturalist training metadata + bounding boxes
 │   │   └── inat_manifest.json      iNat API manifest
 │   ├── autoresearch_status.json     Current autoresearch run status
 │   ├── autoresearch_progress.json   Live training progress
@@ -77,6 +79,9 @@ capstone/
 │       └── pipeline.log             Execution log
 │
 ├── .streamlit/config.toml           Streamlit theme
+│
+├── Birdsnap_Dataset/images.txt      Birdsnap per-image bbox metadata
+├── NABirds_Dataset/nabirds/         NABirds metadata + images (not in git)
 │
 ├── train.py                         Self-contained training script (Codex-managed, stays at root)
 ├── nabirds_common.py                Shared constants and utilities
@@ -118,9 +123,17 @@ capstone/
 | File | Lines | Purpose | Local imports |
 |------|-------|---------|---------------|
 | `prepare.py` | ~240 | One-time setup: parses NABirds metadata, builds train/val/test split DataFrames, caches as pickles. Supports subset98, full555, base_species modes. | `nabirds_common` |
-| `prepare_birdsnap.py` | ~320 | Downloads Birdsnap (~50K images, 500 species) from HuggingFace, maps to NABirds base_species (~335 match), saves training-only pickle. | None |
-| `prepare_inat.py` | ~570 | Queries iNaturalist API for research-grade bird photos, downloads up to 280/species, multi-threaded, creates training-only pickle. | None |
+| `prepare_birdsnap.py` | ~320 | Downloads Birdsnap (~50K images, 500 species) from HuggingFace or rebuilds from local files, reads `Birdsnap_Dataset/images.txt` bounding boxes, maps to NABirds base_species (~335 match), saves training-only pickle. | None |
+| `prepare_inat.py` | ~570 | Queries iNaturalist API for research-grade bird photos, runs bird detection, and saves training-only pickle with bbox metadata. | None |
 | `prepare_combined.py` | ~240 | Merges NABirds + Birdsnap + iNaturalist splits. Modes: `base_combined` (404 classes) or `subset98_combined` (98 classes). Val/test stay NABirds-only. | None |
+
+### notebooks/
+
+| File | Purpose |
+|------|---------|
+| `kaggle_train.ipynb` | Main Kaggle training notebook. Resolves Kaggle dataset mounts, combines Birdsnap shards, reads bbox metadata for raw NABirds/Birdsnap/iNaturalist inputs, and optionally builds `/kaggle/working/session_preprocessed_cache` so deterministic preprocessing happens once per session instead of once per sample fetch. |
+| `kaggle_preprocess_export.ipynb` | Optional Kaggle preprocessing/export notebook. Uses the same bbox-aware preprocessing path to create publishable shard datasets under `/kaggle/working`, and can publish/version them with the Kaggle CLI. |
+| `resnet.ipynb` / `overnight.ipynb` / `bird_infer_pipeline.ipynb` / `visualize_runs.ipynb` / `vit_test.ipynb` | Historical or exploratory notebooks. |
 
 ### inference/
 
@@ -160,6 +173,17 @@ training/autorun.py
 
 dataprep/prepare.py
 └── imports: nabirds_common.py
+
+notebooks/kaggle_train.ipynb
+├── reads: raw Kaggle dataset mounts or preprocessed shard datasets
+├── reads: Birdsnap `images.txt` and iNaturalist `inat_splits.pkl` when attached
+├── writes: /kaggle/working/session_preprocessed_cache (optional)
+└── trains: ResNet-50 on cuda:0
+
+notebooks/kaggle_preprocess_export.ipynb
+├── reads: raw Kaggle dataset mounts + bbox metadata
+├── writes: /kaggle/working/<dataset-shard>/
+└── optionally runs: `kaggle datasets create/version`
 
 inference/bird_pipeline.py
 └── (standalone — inlines its own constants)
@@ -229,6 +253,16 @@ dataprep/prepare_inat.py     ──> artifacts/external/inat_splits.pkl
 dataprep/prepare_combined.py
     ├── reads: artifacts/splits/*.pkl + external/*.pkl
     └── writes: artifacts/splits/*_combined.pkl
+
+Kaggle raw datasets + bbox metadata
+    └── notebooks/kaggle_train.ipynb
+        ├── optionally builds: /kaggle/working/session_preprocessed_cache
+        └── trains from: cached files or attached preprocessed shard datasets
+
+Kaggle raw datasets + bbox metadata
+    └── notebooks/kaggle_preprocess_export.ipynb
+        ├── writes: /kaggle/working/<dataset-shard>/
+        └── optionally publishes: Kaggle dataset shard via CLI
 ```
 
 ## Entry Points
@@ -260,3 +294,5 @@ All commands should be run from the project root directory.
 3. **All scripts use CWD-relative paths** (`Path("artifacts")`, `Path("NABirds_Dataset/nabirds")`) — always run from the project root.
 
 4. **Entry points in subdirectories include a `sys.path` fix** to ensure the project root is importable regardless of how the script is launched.
+
+5. **Kaggle training does deterministic preprocessing once per session** when `notebooks/kaggle_train.ipynb` builds `/kaggle/working/session_preprocessed_cache`. Fully preprocessed shard datasets are optional accelerators, not a hard dependency.
