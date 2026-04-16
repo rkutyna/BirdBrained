@@ -15,6 +15,9 @@
 /artifacts/logs/
 /artifacts/pipeline_runs/
 
+# CoreML exports (regenerate via: python tools/export_coreml.py)
+/artifacts/coreml/
+
 # Photos
 *.jpg
 *.jpeg
@@ -33,6 +36,7 @@ __pycache__/
 .venv/
 .env
 .env.*
+.venv-coreml/
 
 # OS / editor
 .DS_Store

@@ -7,3 +7,4 @@ torch
 torchvision
 ultralytics
 huggingface_hub
+coremltools  # only needed for tools/export_coreml.py
