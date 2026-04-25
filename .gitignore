@@ -33,6 +33,7 @@ __pycache__/
 .venv/
 .env
 .env.*
+.venv-coreml/
 
 # OS / editor
 .DS_Store
