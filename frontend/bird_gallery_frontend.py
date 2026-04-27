@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+from datetime import datetime
+import json
 import logging
 import os
 import re
@@ -13,7 +15,6 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-import numpy as np
 import pandas as pd
 from PIL import Image
 import streamlit as st
@@ -22,6 +23,7 @@ from inference.bird_pipeline import (
     BASE_SPECIES_LABEL_NAMES_CSV,
     DEFAULT_LABEL_NAMES_CSV,
     PipelineConfig,
+    clear_prediction_metadata,
     get_default_device,
     input_items_from_uploaded_files,
     input_items_from_folder,
@@ -29,6 +31,7 @@ from inference.bird_pipeline import (
     list_classifier_checkpoints,
     run_inference_batch,
     classify_crops_batch,
+    write_correction_metadata,
 )
 
 
@@ -37,6 +40,13 @@ COLOR_MAP = {
     "yellow": "#f4b400",
     "red": "#db4437",
 }
+
+_CORRECTION_COLUMNS = [
+    "corrected",
+    "correction_source",
+    "original_pred_species",
+    "corrected_timestamp",
+]
 
 _MODEL_DIR = Path("artifacts/resnet50")
 AUTORESEARCH_LOG_CSV_SUBSET98_COMBINED = _MODEL_DIR / "subset98_combined" / "experiment_log.csv"
@@ -91,6 +101,11 @@ def crop_megapixels_from_row(row: pd.Series) -> float | None:
     if w <= 0.0 or h <= 0.0:
         return None
     return (w * h) / 1_000_000.0
+
+
+@st.cache_data
+def _load_species_list(label_names_csv: str) -> list[str]:
+    return pd.read_csv(label_names_csv)["species"].dropna().astype(str).tolist()
 
 
 def apply_css() -> None:
@@ -183,6 +198,13 @@ def build_app_logger() -> logging.Logger:
         fh.setFormatter(fmt)
         logger.addHandler(fh)
     return logger
+
+
+def _ensure_correction_columns(df: pd.DataFrame) -> pd.DataFrame:
+    missing = [column for column in _CORRECTION_COLUMNS if column not in df.columns]
+    if not missing:
+        return df
+    return df.reindex(columns=[*df.columns, *missing], fill_value=None)
 
 
 def _path_keys(path_str: str) -> set[str]:
@@ -370,26 +392,11 @@ def render_summary(df: pd.DataFrame) -> None:
     total = len(df)
     birds = int(df["yolo_detected"].fillna(False).sum())
     no_bird = total - birds
-    mean_conf = float(df["pred_confidence"].dropna().mean()) if birds > 0 else 0.0
-    crop_mps = [mp for mp in (crop_megapixels_from_row(row) for _, row in df.iterrows()) if mp is not None]
-    mean_crop_mp = float(np.mean(crop_mps)) if crop_mps else None
-    if "sharpness_score_100" in df.columns:
-        sharp_vals = pd.to_numeric(df["sharpness_score_100"], errors="coerce")
-        mean_sharp = float(sharp_vals.dropna().mean()) if sharp_vals.notna().any() else None
-    elif "sharpness_tenengrad" in df.columns:
-        # Backward compatibility for older run outputs.
-        sharp_vals = pd.to_numeric(df["sharpness_tenengrad"], errors="coerce")
-        mean_sharp = float(sharp_vals.dropna().mean()) if sharp_vals.notna().any() else None
-    else:
-        mean_sharp = None
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Total images", total)
     c2.metric("Bird detected", birds)
     c3.metric("No bird", no_bird)
-    c4.metric("Mean top-1 confidence", f"{mean_conf*100:.1f}%")
-    c5.metric("Mean Sharpness (0-100)", f"{mean_sharp:.1f}" if mean_sharp is not None else "n/a")
-    c6.metric("Mean crop MP", f"{mean_crop_mp:.2f}" if mean_crop_mp is not None else "n/a")
 
     if "metadata_written" in df.columns:
         tagged = int(df["metadata_written"].fillna(False).sum())
@@ -438,7 +445,12 @@ def render_summary(df: pd.DataFrame) -> None:
             )
 
 
-def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
+def render_gallery(
+    df: pd.DataFrame,
+    run_dir: Path,
+    label_names_csv: str | Path,
+    default_page_size: int = 200,
+) -> None:
     show_df = df.copy()
 
     has_ground_truth = "ground_truth" in show_df.columns and show_df["ground_truth"].notna().any()
@@ -546,6 +558,8 @@ def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
     st.caption(f"Showing {start + 1}-{end} of {total_rows} results (page {page}/{total_pages})")
 
     for _, row in page_df.iterrows():
+        row_idx = int(row.name)
+        key_base = f"corr_{run_dir.name}_{row_idx}"
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
             left, right = st.columns([1.4, 1.2])
@@ -579,7 +593,10 @@ def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
                     )
 
                 if pd.notna(row.get("pred_species")):
-                    st.markdown(f"Predicted species: **{row['pred_species']}**")
+                    correction_note = ""
+                    if str(row.get("corrected")).strip().lower() == "true":
+                        correction_note = " (manually corrected)"
+                    st.markdown(f"Predicted species: **{row['pred_species']}**{correction_note}")
                     st.markdown(
                         "Confidence: "
                         + confidence_badge(
@@ -588,23 +605,6 @@ def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
                         ),
                         unsafe_allow_html=True,
                     )
-                    top5 = _parse_top5(row.get("pred_top5"))
-                    if top5:
-                        gt_base = _strip_qualifier(str(row.get("ground_truth", ""))) if pd.notna(row.get("ground_truth")) else None
-                        rank1_conf = row.get("pred_confidence", 0) * 100
-                        rank1_match = gt_base and _strip_qualifier(str(row["pred_species"])) == gt_base
-                        rank1_line = f"1. {row['pred_species']} ({rank1_conf:.1f}%)"
-                        if rank1_match:
-                            rank1_line += " ← ground truth"
-
-                        remaining = []
-                        for e in top5[1:]:  # skip rank 1, already shown above
-                            sp = e.get("species", "?")
-                            cf = e.get("confidence", 0.0)
-                            match = gt_base and _strip_qualifier(sp) == gt_base
-                            highlight = " ← ground truth" if match else ""
-                            remaining.append(f"{e['rank']}. {sp} ({cf*100:.1f}%){highlight}")
-                        st.caption("Top 5:\n" + "\n".join([rank1_line] + remaining))
                     sharpness_100 = row.get("sharpness_score_100")
                     if pd.notna(sharpness_100):
                         sharpness_color = row.get("sharpness_color")
@@ -647,6 +647,20 @@ def render_gallery(df: pd.DataFrame, default_page_size: int = 200) -> None:
                     else:
                         st.info("No crop")
 
+            with st.expander("Correct prediction", expanded=False):
+                if row.get("source_type") != "folder":
+                    st.caption("Corrections only apply to folder-source images.")
+                else:
+                    species_list = _load_species_list(str(label_names_csv))
+                    options = ["No bird", "Other", *species_list]
+                    choice = st.selectbox("New tag", options=options, key=f"{key_base}_sel")
+                    other_text = ""
+                    if choice == "Other":
+                        other_text = st.text_input("Custom species name", key=f"{key_base}_other")
+                    update_disabled = choice == "Other" and not other_text.strip()
+                    if st.button("Update", key=f"{key_base}_btn", type="primary", disabled=update_disabled):
+                        _apply_correction(run_dir, row_idx, choice, other_text.strip())
+
             st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -686,6 +700,136 @@ def _parse_top5(value) -> list | None:
         return parsed if isinstance(parsed, list) else None
     except Exception:
         return None
+
+
+def _json_ready_value(column: str, value):
+    if column == "pred_top5":
+        return _parse_top5(value)
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+        try:
+            return value.item()
+        except Exception:
+            return value
+    return value
+
+
+def _write_results_json(results_json_path: Path, df: pd.DataFrame) -> None:
+    records = []
+    for _, row in df.iterrows():
+        record = {column: _json_ready_value(column, value) for column, value in row.items()}
+        records.append(record)
+    with open(results_json_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+
+
+def _apply_correction(run_dir: Path, row_idx: int, choice: str, other_text: str) -> None:
+    logger = build_app_logger()
+    results_csv_path = run_dir / "results.csv"
+    results_json_path = run_dir / "results.json"
+
+    df = _ensure_correction_columns(pd.read_csv(results_csv_path))
+    if row_idx not in df.index:
+        logger.warning("Correction skipped | run_dir=%s | row_idx=%s | reason=missing_row", run_dir, row_idx)
+        return
+
+    row = df.loc[row_idx].copy()
+    source_type = row.get("source_type")
+    source_path_value = row.get("source_path")
+    if source_type != "folder" or pd.isna(source_path_value):
+        logger.warning(
+            "Correction skipped | run_dir=%s | row_idx=%s | source_type=%s | reason=non_folder_or_missing_source",
+            run_dir,
+            row_idx,
+            source_type,
+        )
+        return
+
+    source_path = Path(str(source_path_value))
+    if not source_path.exists():
+        logger.warning(
+            "Correction skipped | run_dir=%s | row_idx=%s | source_path=%s | reason=missing_file",
+            run_dir,
+            row_idx,
+            source_path,
+        )
+        return
+
+    if pd.isna(row.get("original_pred_species")):
+        df.at[row_idx, "original_pred_species"] = row.get("pred_species")
+
+    run_id = str(row.get("run_id")) if pd.notna(row.get("run_id")) else run_dir.name
+    sharpness_level = row.get("sharpness_level") if pd.notna(row.get("sharpness_level")) else None
+    corrected_at = datetime.now().isoformat(timespec="seconds")
+
+    if choice == "No bird":
+        metadata_written, metadata_method, metadata_error = clear_prediction_metadata(source_path)
+        for column in [
+            "pred_species",
+            "pred_confidence",
+            "pred_confidence_color",
+            "pred_top5",
+            "sharpness_score_100",
+            "sharpness_color",
+            "sharpness_level",
+            "sharpness_tenengrad",
+            "crop_path",
+            "bbox_x1",
+            "bbox_y1",
+            "bbox_x2",
+            "bbox_y2",
+            "yolo_conf",
+        ]:
+            if column in df.columns:
+                df.at[row_idx, column] = None
+        df.at[row_idx, "yolo_detected"] = False
+        df.at[row_idx, "correction_source"] = "no_bird"
+        corrected_label = "No bird"
+    else:
+        corrected_species = other_text.strip() if choice == "Other" else choice
+        if not corrected_species:
+            st.toast("Custom species name is required.")
+            return
+        metadata_written, metadata_method, metadata_error = write_correction_metadata(
+            source_path,
+            corrected_species,
+            run_id,
+            sharpness_level_name=sharpness_level,
+        )
+        df.at[row_idx, "pred_species"] = corrected_species
+        for column in ["pred_confidence", "pred_confidence_color", "pred_top5"]:
+            if column in df.columns:
+                df.at[row_idx, column] = None
+        df.at[row_idx, "correction_source"] = "other" if choice == "Other" else "list"
+        corrected_label = corrected_species
+
+    df.at[row_idx, "corrected"] = True
+    df.at[row_idx, "corrected_timestamp"] = corrected_at
+    df.at[row_idx, "metadata_written"] = metadata_written
+    df.at[row_idx, "metadata_method"] = metadata_method
+    df.at[row_idx, "metadata_error"] = metadata_error
+
+    df.to_csv(results_csv_path, index=False)
+    _write_results_json(results_json_path, df)
+
+    if metadata_written:
+        st.toast(f"Updated prediction to {corrected_label}.")
+    else:
+        st.toast("Correction saved, but JPEG metadata update failed.")
+        logger.warning(
+            "Correction metadata write failed | run_dir=%s | row_idx=%s | method=%s | error=%s",
+            run_dir,
+            row_idx,
+            metadata_method,
+            metadata_error,
+        )
+    st.rerun()
 
 
 def _strip_qualifier(name: str) -> str:
@@ -764,6 +908,56 @@ def list_previous_run_dirs(root: Path = Path("artifacts/pipeline_runs")) -> list
     return runs
 
 
+def _render_run_from_disk(
+    run_dir: Path,
+    label_names_csv: str | Path,
+    *,
+    success_message: str,
+) -> None:
+    results_csv_path = run_dir / "results.csv"
+    results_json_path = run_dir / "results.json"
+    errors_path = run_dir / "errors.csv"
+
+    result_df = pd.read_csv(results_csv_path)
+    result_df = _ensure_correction_columns(result_df)
+    labels = _infer_labels_from_results(result_df)
+    if labels:
+        result_df = _annotate_with_ground_truth(result_df, labels, label_names_csv)
+    st.success(success_message)
+    if labels:
+        st.info(f"Found labels.csv with {len(labels)} labeled photo(s) — showing accuracy metrics.")
+    render_summary(result_df)
+
+    st.subheader("Gallery")
+    render_gallery(result_df, run_dir, label_names_csv)
+
+    st.subheader("Exports")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button(
+            "Download results.csv",
+            data=results_csv_path.read_bytes(),
+            file_name=f"{run_dir.name}_results.csv",
+            mime="text/csv",
+        )
+    with c2:
+        if results_json_path.exists():
+            st.download_button(
+                "Download results.json",
+                data=results_json_path.read_bytes(),
+                file_name=f"{run_dir.name}_results.json",
+                mime="application/json",
+            )
+
+    if errors_path.exists():
+        st.subheader("Errors")
+        err_df = pd.read_csv(errors_path)
+        st.dataframe(err_df, width="stretch")
+
+    st.caption("Frontend log: artifacts/pipeline_runs/frontend.log")
+    st.caption(f"Pipeline log for this run: {run_dir / 'pipeline.log'}")
+
+
 def _render_classify_tab(
     tab,
     *,
@@ -797,53 +991,35 @@ def _render_classify_tab(
                 st.info("Select a saved run to view results.")
                 return
             try:
-                results_csv_path = selected_run_dir / "results.csv"
-                results_json_path = selected_run_dir / "results.json"
-                errors_path = selected_run_dir / "errors.csv"
-
-                result_df = pd.read_csv(results_csv_path)
-                prev_labels = _infer_labels_from_results(result_df)
-                if prev_labels:
-                    result_df = _annotate_with_ground_truth(result_df, prev_labels, label_names_csv)
-                st.success(f"Loaded previous run: {selected_run_dir}")
-                if prev_labels:
-                    st.info(f"Found labels.csv with {len(prev_labels)} labeled photo(s) — showing accuracy metrics.")
-                render_summary(result_df)
-
-                st.subheader("Gallery")
-                render_gallery(result_df)
-
-                st.subheader("Exports")
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.download_button(
-                        "Download results.csv",
-                        data=results_csv_path.read_bytes(),
-                        file_name=f"{selected_run_dir.name}_results.csv",
-                        mime="text/csv",
-                    )
-                with c2:
-                    if results_json_path.exists():
-                        st.download_button(
-                            "Download results.json",
-                            data=results_json_path.read_bytes(),
-                            file_name=f"{selected_run_dir.name}_results.json",
-                            mime="application/json",
-                        )
-
-                if errors_path.exists():
-                    st.subheader("Errors")
-                    err_df = pd.read_csv(errors_path)
-                    st.dataframe(err_df, width="stretch")
-
-                st.caption("Frontend log: artifacts/pipeline_runs/frontend.log")
-                st.caption(f"Pipeline log for this run: {selected_run_dir / 'pipeline.log'}")
+                _render_run_from_disk(
+                    selected_run_dir,
+                    label_names_csv,
+                    success_message=f"Loaded previous run: {selected_run_dir}",
+                )
             except Exception as e:
                 logger.exception("Failed to load previous run")
                 st.error(f"Could not load previous run: {type(e).__name__}: {e}")
             return
 
         if not run_clicked:
+            # Streamlit reruns on every widget interaction (gallery filters, sort,
+            # pagination). Re-render the most recent completed run from disk so
+            # the gallery survives those reruns instead of reverting to the
+            # pre-run placeholder.
+            last_run_str = st.session_state.get("last_run_dir")
+            if last_run_str:
+                last_run_dir = Path(last_run_str)
+                if (last_run_dir / "results.csv").exists():
+                    try:
+                        _render_run_from_disk(
+                            last_run_dir,
+                            label_names_csv,
+                            success_message=f"Showing results from run: {last_run_dir.name}",
+                        )
+                    except Exception as e:
+                        logger.exception("Failed to render last run")
+                        st.error(f"Could not display last run: {type(e).__name__}: {e}")
+                    return
             st.info("Select inputs and click Run Inference.")
             return
 
@@ -912,48 +1088,24 @@ def _render_classify_tab(
             status.success(f"Finished. Run ID: {run_dir.name}")
             logger.info("Run completed | run_dir=%s | results=%d | errors=%d", run_dir, len(results), len(errors))
 
-            st.success(f"Completed run: {run_dir}")
-
-            result_df = pd.DataFrame([r.__dict__ for r in results])
-            if input_mode == "Folder path" and folder_path.strip():
-                folder_labels = _load_folder_labels(folder_path.strip())
-                if folder_labels:
-                    result_df = _annotate_with_ground_truth(result_df, folder_labels, label_names_csv)
-                    st.info(f"Found labels.csv with {len(folder_labels)} labeled photo(s) — showing accuracy metrics.")
-            render_summary(result_df)
-
-            st.subheader("Gallery")
-            render_gallery(result_df)
-
-            st.subheader("Exports")
-            results_csv_path = run_dir / "results.csv"
-            results_json_path = run_dir / "results.json"
-
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button(
-                    "Download results.csv",
-                    data=results_csv_path.read_bytes(),
-                    file_name=f"{run_dir.name}_results.csv",
-                    mime="text/csv",
-                )
-            with c2:
-                st.download_button(
-                    "Download results.json",
-                    data=results_json_path.read_bytes(),
-                    file_name=f"{run_dir.name}_results.json",
-                    mime="application/json",
-                )
-
             errors_path = run_dir / "errors.csv"
             if errors_path.exists():
-                st.subheader("Errors")
-                err_df = pd.read_csv(errors_path)
-                st.dataframe(err_df, width="stretch")
-                logger.warning("Run completed with errors | errors_csv=%s | count=%d", errors_path, len(err_df))
+                logger.warning(
+                    "Run completed with errors | errors_csv=%s | count=%d",
+                    errors_path,
+                    len(errors),
+                )
 
-            st.caption(f"Frontend log: artifacts/pipeline_runs/frontend.log")
-            st.caption(f"Pipeline log for this run: {run_dir / 'pipeline.log'}")
+            # Persist run_dir so subsequent Streamlit reruns (triggered by
+            # gallery filter/sort widgets) can re-render this run instead of
+            # reverting to the pre-run placeholder.
+            st.session_state["last_run_dir"] = str(run_dir)
+
+            _render_run_from_disk(
+                run_dir,
+                label_names_csv,
+                success_message=f"Completed run: {run_dir}",
+            )
 
         except Exception as e:
             logger.exception("Pipeline failed")

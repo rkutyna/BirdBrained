@@ -712,6 +712,98 @@ def write_prediction_metadata(
         return False, "exiftool", str(e)
 
 
+def write_correction_metadata(
+    image_path: str | Path,
+    species: str,
+    run_id: str,
+    sharpness_level_name: str | None = None,
+) -> tuple[bool, str | None, str | None]:
+    target = Path(image_path)
+    if not target.exists():
+        return False, None, f"missing_file:{target}"
+
+    exiftool = shutil.which("exiftool")
+    if exiftool is None:
+        return False, None, "exiftool_not_found"
+
+    corrected_at = datetime.now().isoformat(timespec="seconds")
+    comment = f"bird_correction species={species}; run_id={run_id}; corrected_at={corrected_at}"
+
+    hierarchical_keywords = [_hierarchical_keyword(["Species", species])]
+    if sharpness_level_name:
+        hierarchical_keywords.append(_hierarchical_keyword(["Sharpness", sharpness_level_name]))
+
+    flat_keywords = [_keyword_component(species)]
+    if sharpness_level_name:
+        flat_keywords.append(f"Sharpness: {_keyword_component(sharpness_level_name)}")
+
+    clear_cmd = [
+        exiftool,
+        "-overwrite_original",
+        "-m",
+        "-XMP-lr:HierarchicalSubject=",
+        "-XMP-dc:Subject=",
+        "-IPTC:Keywords=",
+        str(target),
+    ]
+    write_cmd = [
+        exiftool,
+        "-overwrite_original",
+        "-m",
+        f"-EXIF:UserComment={comment}",
+    ]
+    for keyword in hierarchical_keywords:
+        write_cmd.append(f"-XMP-lr:HierarchicalSubject+={keyword}")
+    for keyword in flat_keywords:
+        write_cmd.append(f"-XMP-dc:Subject+={keyword}")
+        write_cmd.append(f"-IPTC:Keywords+={keyword}")
+    write_cmd.append("-IPTCDigest=new")
+    write_cmd.append(str(target))
+
+    try:
+        subprocess.run(clear_cmd, check=True, capture_output=True, text=True)
+        subprocess.run(write_cmd, check=True, capture_output=True, text=True)
+        return True, "exiftool_corrected", None
+    except subprocess.CalledProcessError as e:
+        message = (e.stderr or e.stdout or str(e)).strip()
+        return False, "exiftool_corrected", message[:500]
+    except Exception as e:
+        return False, "exiftool_corrected", str(e)
+
+
+def clear_prediction_metadata(
+    image_path: str | Path,
+) -> tuple[bool, str | None, str | None]:
+    target = Path(image_path)
+    if not target.exists():
+        return False, None, f"missing_file:{target}"
+
+    exiftool = shutil.which("exiftool")
+    if exiftool is None:
+        return False, None, "exiftool_not_found"
+
+    clear_cmd = [
+        exiftool,
+        "-overwrite_original",
+        "-m",
+        "-XMP-lr:HierarchicalSubject=",
+        "-XMP-dc:Subject=",
+        "-IPTC:Keywords=",
+        "-EXIF:UserComment=",
+        "-IPTCDigest=new",
+        str(target),
+    ]
+
+    try:
+        subprocess.run(clear_cmd, check=True, capture_output=True, text=True)
+        return True, "exiftool_cleared", None
+    except subprocess.CalledProcessError as e:
+        message = (e.stderr or e.stdout or str(e)).strip()
+        return False, "exiftool_cleared", message[:500]
+    except Exception as e:
+        return False, "exiftool_cleared", str(e)
+
+
 def _build_exiftool_args_for_row(
     row: ResultRow,
     checkpoint_path: str,

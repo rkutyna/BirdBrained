@@ -15,6 +15,9 @@
 /artifacts/logs/
 /artifacts/pipeline_runs/
 
+#ios implementation
+/artifacts/coreml/
+
 # Photos
 *.jpg
 *.jpeg
